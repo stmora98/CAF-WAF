@@ -1,0 +1,5 @@
+resources
+| where type in ('microsoft.network/dnszones', 'microsoft.network/privatednszones')
+| extend recordSetCount = properties.numberOfRecordSets
+| project name, type, resourceGroup, subscriptionId, location, recordSetCount, tags
+| order by type asc, name asc

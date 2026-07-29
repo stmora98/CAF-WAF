@@ -1,0 +1,260 @@
+// ============================================================================
+// Azure Environment Discovery for WAF/CAF Workshops
+// All queries compatible with Azure Resource Graph Explorer
+// ============================================================================
+// Usage: Copy individual sections into Azure Resource Graph Explorer
+//        (portal.azure.com → Resource Graph Explorer)
+// ============================================================================
+
+
+// ─── 1. SUBSCRIPTIONS OVERVIEW ──────────────────────────────────────────────
+resourcecontainers
+| where type == 'microsoft.resources/subscriptions'
+| project subscriptionId, name, properties.state, tags
+| order by name asc
+
+
+// ─── 2. RESOURCE GROUPS ─────────────────────────────────────────────────────
+resourcecontainers
+| where type == 'microsoft.resources/subscriptions/resourcegroups'
+| project name, location, subscriptionId, tags, properties.provisioningState
+| order by subscriptionId asc, name asc
+
+
+// ─── 3. RESOURCE SUMMARY BY TYPE & REGION ───────────────────────────────────
+resources
+| summarize Count=count() by type, location
+| order by Count desc
+
+
+// ─── 4. VIRTUAL MACHINES ────────────────────────────────────────────────────
+resources
+| where type == 'microsoft.compute/virtualmachines'
+| extend vmSize = properties.hardwareProfile.vmSize,
+         osType = properties.storageProfile.osDisk.osType,
+         osPublisher = properties.storageProfile.imageReference.publisher,
+         osSku = properties.storageProfile.imageReference.sku,
+         powerState = properties.extended.instanceView.powerState.displayStatus,
+         availabilityZone = tostring(zones[0])
+| project name, resourceGroup, subscriptionId, location, vmSize, osType,
+          osPublisher, osSku, powerState, availabilityZone, tags
+| order by subscriptionId asc, name asc
+
+
+// ─── 5. APP SERVICES & FUNCTIONS ────────────────────────────────────────────
+resources
+| where type in ('microsoft.web/sites', 'microsoft.web/serverfarms')
+| extend kind_ = kind,
+         sku = properties.sku,
+         state = properties.state,
+         httpsOnly = properties.httpsOnly,
+         reserved = properties.reserved
+| project name, type, resourceGroup, subscriptionId, location, kind_,
+          sku, state, httpsOnly, reserved, tags
+| order by type asc, name asc
+
+
+// ─── 6. AKS CLUSTERS ───────────────────────────────────────────────────────
+resources
+| where type == 'microsoft.containerservice/managedclusters'
+| extend kubernetesVersion = properties.kubernetesVersion,
+         nodeCount = properties.agentPoolProfiles[0].count,
+         nodeVmSize = properties.agentPoolProfiles[0].vmSize,
+         networkPlugin = properties.networkProfile.networkPlugin,
+         tier = sku.tier
+| project name, resourceGroup, subscriptionId, location, kubernetesVersion,
+          nodeCount, nodeVmSize, networkPlugin, tier, tags
+| order by name asc
+
+
+// ─── 7. VIRTUAL NETWORKS ───────────────────────────────────────────────────
+resources
+| where type == 'microsoft.network/virtualnetworks'
+| extend addressSpace = tostring(properties.addressSpace.addressPrefixes),
+         subnetsCount = array_length(properties.subnets),
+         enableDdosProtection = properties.enableDdosProtection
+| project name, resourceGroup, subscriptionId, location, addressSpace,
+          subnetsCount, enableDdosProtection, tags
+| order by name asc
+
+
+// ─── 8. NETWORK SECURITY GROUPS ─────────────────────────────────────────────
+resources
+| where type == 'microsoft.network/networksecuritygroups'
+| extend rulesCount = array_length(properties.securityRules),
+         subnets = array_length(properties.subnets),
+         nics = array_length(properties.networkInterfaces)
+| project name, resourceGroup, subscriptionId, location, rulesCount, subnets, nics, tags
+| order by name asc
+
+
+// ─── 9. LOAD BALANCERS, APP GATEWAYS, FRONT DOOR, CDN ──────────────────────
+resources
+| where type in ('microsoft.network/loadbalancers',
+                 'microsoft.network/applicationgateways',
+                 'microsoft.network/frontdoors',
+                 'microsoft.cdn/profiles')
+| extend skuName = sku.name, skuTier = sku.tier
+| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, tags
+| order by type asc, name asc
+
+
+// ─── 10. FIREWALLS & WAF POLICIES ──────────────────────────────────────────
+resources
+| where type in ('microsoft.network/azurefirewalls',
+                 'microsoft.network/firewallpolicies',
+                 'microsoft.network/applicationgatewaywebapplicationfirewallpolicies')
+| extend skuName = sku.name, skuTier = sku.tier,
+         threatIntelMode = properties.threatIntelMode
+| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier,
+          threatIntelMode, tags
+| order by type asc, name asc
+
+
+// ─── 11. PRIVATE ENDPOINTS ──────────────────────────────────────────────────
+resources
+| where type == 'microsoft.network/privateendpoints'
+| extend targetResource = tostring(properties.privateLinkServiceConnections[0].properties.privateLinkServiceId),
+         connectionStatus = properties.privateLinkServiceConnections[0].properties.privateLinkServiceConnectionState.status
+| project name, resourceGroup, subscriptionId, location, targetResource, connectionStatus, tags
+| order by name asc
+
+
+// ─── 12. PUBLIC IP ADDRESSES ────────────────────────────────────────────────
+resources
+| where type == 'microsoft.network/publicipaddresses'
+| extend ipAddress = properties.ipAddress,
+         allocationMethod = properties.publicIPAllocationMethod,
+         skuName = sku.name,
+         associatedTo = coalesce(
+             tostring(properties.ipConfiguration.id),
+             'Unassociated'
+         )
+| project name, resourceGroup, subscriptionId, location, ipAddress,
+          allocationMethod, skuName, associatedTo, tags
+| order by name asc
+
+
+// ─── 13. DNS ZONES ──────────────────────────────────────────────────────────
+resources
+| where type in ('microsoft.network/dnszones', 'microsoft.network/privatednszones')
+| extend recordSetCount = properties.numberOfRecordSets
+| project name, type, resourceGroup, subscriptionId, location, recordSetCount, tags
+| order by type asc, name asc
+
+
+// ─── 14. STORAGE ACCOUNTS ───────────────────────────────────────────────────
+resources
+| where type == 'microsoft.storage/storageaccounts'
+| extend skuName = sku.name,
+         kind_ = kind,
+         httpsOnly = properties.supportsHttpsTrafficOnly,
+         minimumTlsVersion = properties.minimumTlsVersion,
+         networkDefaultAction = properties.networkAcls.defaultAction,
+         allowBlobPublicAccess = properties.allowBlobPublicAccess
+| project name, resourceGroup, subscriptionId, location, skuName, kind_,
+          httpsOnly, minimumTlsVersion, networkDefaultAction,
+          allowBlobPublicAccess, tags
+| order by name asc
+
+
+// ─── 15. DATABASES (SQL, PostgreSQL, CosmosDB, Redis) ───────────────────────
+resources
+| where type in ('microsoft.sql/servers',
+                 'microsoft.sql/servers/databases',
+                 'microsoft.dbformysql/flexibleservers',
+                 'microsoft.dbforpostgresql/flexibleservers',
+                 'microsoft.documentdb/databaseaccounts',
+                 'microsoft.cache/redis')
+| extend skuName = sku.name,
+         skuTier = sku.tier,
+         skuCapacity = sku.capacity
+| project name, type, resourceGroup, subscriptionId, location,
+          skuName, skuTier, skuCapacity, tags
+| order by type asc, name asc
+
+
+// ─── 16. KEY VAULTS ─────────────────────────────────────────────────────────
+resources
+| where type == 'microsoft.keyvault/vaults'
+| extend skuName = properties.sku.name,
+         enableSoftDelete = properties.enableSoftDelete,
+         enablePurgeProtection = properties.enablePurgeProtection,
+         enableRbac = properties.enableRbacAuthorization,
+         networkDefaultAction = properties.networkAcls.defaultAction
+| project name, resourceGroup, subscriptionId, location, skuName,
+          enableSoftDelete, enablePurgeProtection, enableRbac,
+          networkDefaultAction, tags
+| order by name asc
+
+
+// ─── 17. MANAGED IDENTITIES ────────────────────────────────────────────────
+resources
+| where type in ('microsoft.managedidentity/userassignedidentities')
+| project name, resourceGroup, subscriptionId, location, tags
+| order by name asc
+
+
+// ─── 18. MONITORING (Log Analytics, App Insights, Alerts) ───────────────────
+resources
+| where type in ('microsoft.insights/components',
+                 'microsoft.operationalinsights/workspaces',
+                 'microsoft.insights/activitylogalerts',
+                 'microsoft.insights/metricalerts',
+                 'microsoft.insights/actiongroups',
+                 'microsoft.monitor/accounts')
+| extend skuName = sku.name, retentionDays = properties.retentionInDays
+| project name, type, resourceGroup, subscriptionId, location, skuName, retentionDays, tags
+| order by type asc, name asc
+
+
+// ─── 19. POLICY ASSIGNMENTS ────────────────────────────────────────────────
+policyresources
+| where type == 'microsoft.authorization/policyassignments'
+| extend displayName = properties.displayName,
+         enforcementMode = properties.enforcementMode,
+         policyDefinitionId = properties.policyDefinitionId,
+         scope = properties.scope
+| project name, displayName, enforcementMode, policyDefinitionId, scope, subscriptionId
+| order by displayName asc
+
+
+// ─── 20. BACKUP & RECOVERY VAULTS ──────────────────────────────────────────
+resources
+| where type in ('microsoft.recoveryservices/vaults',
+                 'microsoft.dataprotection/backupvaults')
+| extend skuName = sku.name, redundancy = properties.storageSettings[0].type
+| project name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
+| order by type asc, name asc
+
+
+// ─── 21. UNATTACHED MANAGED DISKS (Cost Waste) ─────────────────────────────
+resources
+| where type == 'microsoft.compute/disks'
+| where isnull(managedBy) or managedBy == ''
+| extend diskSizeGB = properties.diskSizeGB,
+         skuName = sku.name,
+         diskState = properties.diskState
+| project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
+| order by diskSizeGB desc
+
+
+// ─── 22. DEALLOCATED VMs (Cost Waste) ──────────────────────────────────────
+resources
+| where type == 'microsoft.compute/virtualmachines'
+| where properties.extended.instanceView.powerState.displayStatus == 'VM deallocated'
+| extend vmSize = properties.hardwareProfile.vmSize
+| project name, resourceGroup, subscriptionId, location, vmSize, tags
+| order by name asc
+
+
+// ─── 23. AZURE ADVISOR RECOMMENDATIONS ─────────────────────────────────────
+advisorresources
+| where type == 'microsoft.advisor/recommendations'
+| extend category = properties.category,
+         impact = properties.impact,
+         impactedField = properties.impactedField,
+         impactedValue = properties.impactedValue,
+         shortDescription = tostring(properties.shortDescription.solution)
+| project category, impact, impactedField, impactedValue, shortDescription, subscriptionId
+| order by category asc, impact desc

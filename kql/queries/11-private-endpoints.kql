@@ -1,0 +1,6 @@
+resources
+| where type == 'microsoft.network/privateendpoints'
+| extend targetResource = tostring(properties.privateLinkServiceConnections[0].properties.privateLinkServiceId),
+         connectionStatus = properties.privateLinkServiceConnections[0].properties.privateLinkServiceConnectionState.status
+| project name, resourceGroup, subscriptionId, location, targetResource, connectionStatus, tags
+| order by name asc

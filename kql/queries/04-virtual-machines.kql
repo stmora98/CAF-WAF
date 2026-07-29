@@ -1,0 +1,11 @@
+resources
+| where type == 'microsoft.compute/virtualmachines'
+| extend vmSize = properties.hardwareProfile.vmSize,
+         osType = properties.storageProfile.osDisk.osType,
+         osPublisher = properties.storageProfile.imageReference.publisher,
+         osSku = properties.storageProfile.imageReference.sku,
+         powerState = properties.extended.instanceView.powerState.displayStatus,
+         availabilityZone = tostring(zones[0])
+| project name, resourceGroup, subscriptionId, location, vmSize, osType,
+          osPublisher, osSku, powerState, availabilityZone, tags
+| order by subscriptionId asc, name asc

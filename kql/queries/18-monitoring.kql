@@ -1,0 +1,10 @@
+resources
+| where type in ('microsoft.insights/components',
+                 'microsoft.operationalinsights/workspaces',
+                 'microsoft.insights/activitylogalerts',
+                 'microsoft.insights/metricalerts',
+                 'microsoft.insights/actiongroups',
+                 'microsoft.monitor/accounts')
+| extend skuName = sku.name, retentionDays = properties.retentionInDays
+| project name, type, resourceGroup, subscriptionId, location, skuName, retentionDays, tags
+| order by type asc, name asc

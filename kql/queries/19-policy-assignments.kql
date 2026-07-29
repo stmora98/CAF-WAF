@@ -1,0 +1,8 @@
+policyresources
+| where type == 'microsoft.authorization/policyassignments'
+| extend displayName = properties.displayName,
+         enforcementMode = properties.enforcementMode,
+         policyDefinitionId = properties.policyDefinitionId,
+         scope = properties.scope
+| project name, displayName, enforcementMode, policyDefinitionId, scope, subscriptionId
+| order by displayName asc

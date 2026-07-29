@@ -1,0 +1,10 @@
+resources
+| where type == 'microsoft.containerservice/managedclusters'
+| extend kubernetesVersion = properties.kubernetesVersion,
+         nodeCount = properties.agentPoolProfiles[0].count,
+         nodeVmSize = properties.agentPoolProfiles[0].vmSize,
+         networkPlugin = properties.networkProfile.networkPlugin,
+         tier = sku.tier
+| project name, resourceGroup, subscriptionId, location, kubernetesVersion,
+          nodeCount, nodeVmSize, networkPlugin, tier, tags
+| order by name asc

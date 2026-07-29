@@ -1,0 +1,9 @@
+advisorresources
+| where type == 'microsoft.advisor/recommendations'
+| extend category = properties.category,
+         impact = properties.impact,
+         impactedField = properties.impactedField,
+         impactedValue = properties.impactedValue,
+         shortDescription = tostring(properties.shortDescription.solution)
+| project category, impact, impactedField, impactedValue, shortDescription, subscriptionId
+| order by category asc, impact desc

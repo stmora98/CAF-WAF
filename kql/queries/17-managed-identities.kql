@@ -1,0 +1,4 @@
+resources
+| where type in ('microsoft.managedidentity/userassignedidentities')
+| project name, resourceGroup, subscriptionId, location, tags
+| order by name asc
