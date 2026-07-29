@@ -1,8 +1,0 @@
-resources
-| where type == 'microsoft.compute/disks'
-| where isnull(managedBy) or managedBy == ''
-| extend diskSizeGB = properties.diskSizeGB,
-         skuName = sku.name,
-         diskState = properties.diskState
-| project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
-| order by diskSizeGB desc

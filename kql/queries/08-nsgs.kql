@@ -1,7 +1,0 @@
-resources
-| where type == 'microsoft.network/networksecuritygroups'
-| extend rulesCount = array_length(properties.securityRules),
-         subnets = array_length(properties.subnets),
-         nics = array_length(properties.networkInterfaces)
-| project name, resourceGroup, subscriptionId, location, rulesCount, subnets, nics, tags
-| order by name asc

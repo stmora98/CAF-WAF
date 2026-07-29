@@ -1,9 +1,0 @@
-resources
-| where type in ('microsoft.network/azurefirewalls',
-                 'microsoft.network/firewallpolicies',
-                 'microsoft.network/applicationgatewaywebapplicationfirewallpolicies')
-| extend skuName = sku.name, skuTier = sku.tier,
-         threatIntelMode = properties.threatIntelMode
-| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier,
-          threatIntelMode, tags
-| order by type asc, name asc

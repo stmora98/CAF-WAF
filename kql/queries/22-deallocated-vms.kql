@@ -1,6 +1,0 @@
-resources
-| where type == 'microsoft.compute/virtualmachines'
-| where properties.extended.instanceView.powerState.displayStatus == 'VM deallocated'
-| extend vmSize = properties.hardwareProfile.vmSize
-| project name, resourceGroup, subscriptionId, location, vmSize, tags
-| order by name asc

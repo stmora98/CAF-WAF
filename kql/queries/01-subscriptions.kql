@@ -1,4 +1,0 @@
-resourcecontainers
-| where type == 'microsoft.resources/subscriptions'
-| project subscriptionId, name, properties.state, tags
-| order by name asc

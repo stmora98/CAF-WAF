@@ -1,8 +1,0 @@
-resources
-| where type == 'microsoft.network/virtualnetworks'
-| extend addressSpace = tostring(properties.addressSpace.addressPrefixes),
-         subnetsCount = array_length(properties.subnets),
-         enableDdosProtection = properties.enableDdosProtection
-| project name, resourceGroup, subscriptionId, location, addressSpace,
-          subnetsCount, enableDdosProtection, tags
-| order by name asc

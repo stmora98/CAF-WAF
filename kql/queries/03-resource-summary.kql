@@ -1,3 +1,0 @@
-resources
-| summarize Count=count() by type, location
-| order by Count desc
