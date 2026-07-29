@@ -1,9 +1,10 @@
 // ============================================================================
 // Azure Environment Discovery for WAF/CAF Workshops
-// All queries compatible with Azure Resource Graph Explorer
+// REFERENCE FILE - DO NOT paste this entire file into Resource Graph Explorer!
 // ============================================================================
-// Usage: Copy individual sections into Azure Resource Graph Explorer
-//        (portal.azure.com → Resource Graph Explorer)
+// Resource Graph Explorer only supports ONE query at a time.
+// Use the individual .kql files in the kql/queries/ folder instead.
+// This file is a consolidated reference for documentation purposes.
 // ============================================================================
 
 
