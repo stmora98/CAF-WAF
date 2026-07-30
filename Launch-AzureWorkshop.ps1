@@ -47,13 +47,46 @@ New-Item -ItemType Directory -Path "$OutputDir/04_Governance" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/05_Dashboard" -Force | Out-Null
 
 # ─── Ensure modules ──────────────────────────────────────────────────────────
-if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
-    Write-Host "Installing ImportExcel module..." -ForegroundColor Yellow
-    Install-Module ImportExcel -Scope CurrentUser -Force
+Write-Host "Checking prerequisites..." -ForegroundColor Yellow
+
+$requiredModules = @(
+    'Az.Accounts',
+    'Az.Resources',
+    'Az.ResourceGraph',
+    'Az.Monitor',
+    'ImportExcel'
+)
+
+foreach ($mod in $requiredModules) {
+    if (-not (Get-Module -ListAvailable -Name $mod)) {
+        Write-Host "  Installing $mod..." -ForegroundColor DarkYellow
+        Install-Module -Name $mod -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck
+    }
 }
-Import-Module ImportExcel
-Import-Module Az.Resources
-Import-Module Az.ResourceGraph
+
+Import-Module Az.Accounts -ErrorAction Stop
+Import-Module Az.Resources -ErrorAction Stop
+Import-Module Az.ResourceGraph -ErrorAction Stop
+Import-Module Az.Monitor -ErrorAction SilentlyContinue
+Import-Module ImportExcel -ErrorAction Stop
+
+# Ensure Python + openpyxl for the dashboard agent
+$pythonCmd = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" }
+             elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" }
+             else { $null }
+
+if ($pythonCmd) {
+    Write-Host "  Checking Python openpyxl..." -ForegroundColor DarkGray
+    & $pythonCmd -c "import openpyxl" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  Installing openpyxl..." -ForegroundColor DarkYellow
+        & $pythonCmd -m pip install openpyxl --quiet --user 2>$null
+    }
+} else {
+    Write-Host "  ⚠️ Python not found - dashboard generation will need manual pip install" -ForegroundColor DarkYellow
+}
+
+Write-Host "  ✓ All prerequisites satisfied.`n" -ForegroundColor Green
 
 $context = Get-AzContext
 if (-not $context) {
