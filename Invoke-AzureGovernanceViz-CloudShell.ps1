@@ -513,19 +513,21 @@ body {
     font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     font-size: 12px;
     display: flex; flex-direction: column;
-    height: 100vh; overflow: hidden;
+    min-height: 100vh; overflow-y: auto;
     background: #eee;
 }
 
 /* ═══ Panel Layout ═══ */
+/* No fixed/flex height: each panel sizes to its own content by default so nothing is clipped or scrolled. */
+/* resize:vertical still lets the user drag the bottom-right corner to shrink a panel if they want. */
 .panel {
     overflow-y: auto; padding: 16px;
-    resize: vertical; min-height: 100px;
+    resize: vertical; min-height: 150px;
     border-bottom: 2px solid #ccc;
 }
-.panel-hierarchy { background: #fff; flex: 2; }
-.panel-summary { background: #e0f2ff; flex: 3; }
-.panel-scope { background: #eee; flex: 2; }
+.panel-hierarchy { background: #fff; }
+.panel-summary { background: #e0f2ff; }
+.panel-scope { background: #eee; }
 
 .panel-header {
     font-size: 16px; font-weight: 700;

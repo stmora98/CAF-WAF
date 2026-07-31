@@ -82,7 +82,7 @@ Run-Query -Sheet "AKS" -Query '
 resources
 | where type == "microsoft.containerservice/managedclusters"
 | extend k8sVersion = properties.kubernetesVersion,
-         nodeCount = properties.agentPoolProfiles[0].count,
+         nodeCount = toint(properties.agentPoolProfiles[0]["count"]),
          nodeVmSize = properties.agentPoolProfiles[0].vmSize,
          networkPlugin = properties.networkProfile.networkPlugin,
          tier = sku.tier
@@ -205,10 +205,10 @@ resources
 Run-Query -Sheet "PolicyAssignments" -Query '
 policyresources
 | where type == "microsoft.authorization/policyassignments"
-| extend displayName=properties.displayName,
-         enforcement=properties.enforcementMode,
-         definition=properties.policyDefinitionId,
-         scope_=properties.scope
+| extend displayName=tostring(properties.displayName),
+         enforcement=tostring(properties.enforcementMode),
+         definition=tostring(properties.policyDefinitionId),
+         scope_=tostring(properties.scope)
 | project name, displayName, enforcement, definition, scope_, subscriptionId
 | order by displayName asc'
 
@@ -223,7 +223,7 @@ Run-Query -Sheet "UnattachedDisks" -Query '
 resources
 | where type == "microsoft.compute/disks"
 | where isnull(managedBy) or managedBy == ""
-| extend diskSizeGB=properties.diskSizeGB, skuName=sku.name, diskState=properties.diskState
+| extend diskSizeGB=toint(properties.diskSizeGB), skuName=tostring(sku.name), diskState=tostring(properties.diskState)
 | project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
 | order by diskSizeGB desc'
 
@@ -238,10 +238,10 @@ resources
 Run-Query -Sheet "AdvisorRecommendations" -Query '
 advisorresources
 | where type == "microsoft.advisor/recommendations"
-| extend category=properties.category,
-         impact=properties.impact,
-         impactedField=properties.impactedField,
-         impactedValue=properties.impactedValue,
+| extend category=tostring(properties.category),
+         impact=tostring(properties.impact),
+         impactedField=tostring(properties.impactedField),
+         impactedValue=tostring(properties.impactedValue),
          description=tostring(properties.shortDescription.solution)
 | project category, impact, impactedField, impactedValue, description, subscriptionId
 | order by category asc, impact desc'

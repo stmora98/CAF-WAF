@@ -99,7 +99,7 @@ function Resolve-PythonCommand {
 
 $python = Resolve-PythonCommand
 $pythonCmd = if ($python) { $python.Cmd } else { $null }
-$pythonArgs = if ($python) { $python.Args } else { @() }
+[string[]]$pythonArgs = if ($python) { $python.Args } else { @() }
 
 if ($pythonCmd) {
     Write-Host "  Checking Python openpyxl..." -ForegroundColor DarkGray
