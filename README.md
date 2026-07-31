@@ -182,3 +182,7 @@ Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` m
 - Use `-SkipMetrics` if you're short on time during a workshop.
 - The Governance HTML can be used standalone as an AzGovViz-lite alternative.
 - Security API failures are isolated by source and do not prevent the workbook or dashboard from being generated.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
