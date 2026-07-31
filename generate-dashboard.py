@@ -441,6 +441,36 @@ class InsightEngine:
                 "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in sec_recs[:10]]
             })
         
+        # Broad-scope Owner/Contributor role assignments (RBAC hygiene, informational)
+        OWNER_ROLE_ID = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+        CONTRIBUTOR_ROLE_ID = "b24988ac-6180-42a0-ab88-20f7382dd24c"
+        role_assignments = self.data.get("governance", {}).get("RoleAssignments", [])
+        broad_privileged = [
+            r for r in role_assignments
+            if any(rid in str(r.get("roleDefId", "")) for rid in (OWNER_ROLE_ID, CONTRIBUTOR_ROLE_ID))
+            and "resourceGroups" not in str(r.get("scope_", ""))
+        ]
+        if broad_privileged:
+            self.action_items.append({
+                "pillar": "Security",
+                "severity": "medium",
+                "title": f"{len(broad_privileged)} Owner/Contributor role assignments at subscription scope or higher",
+                "description": "Review broad-scope privileged role assignments for least-privilege access. Prefer scoping to resource groups.",
+                "resources": [f"{r.get('principalType', '')} ({r.get('scope_', '')})" for r in broad_privileged[:10]]
+            })
+        
+        # Microsoft Defender for Cloud plans not enabled (informational)
+        defender_plans = self.data.get("governance", {}).get("DefenderPlans", [])
+        disabled_plans = [p for p in defender_plans if str(p.get("tier", "")).lower() == "free"]
+        if disabled_plans:
+            self.action_items.append({
+                "pillar": "Security",
+                "severity": "medium",
+                "title": f"{len(disabled_plans)} Microsoft Defender for Cloud plans not enabled (Free tier)",
+                "description": "Enable Microsoft Defender for Cloud plans for full threat protection coverage.",
+                "resources": sorted({p.get("name", "") for p in disabled_plans})[:10]
+            })
+        
         self.scores["Security"] = round(avg_score) if avg_score is not None else 0
         self.breakdowns["Security"] = {
             "available": avg_score is not None,
@@ -557,20 +587,40 @@ class InsightEngine:
                     "resources": [d.get("Name", d.get("name", "")) for d in no_diag[:10]]
                 })
         
-        # Tag coverage
-        tag_subs = self.data.get("governance", {}).get("TagUsage_Subscriptions", [])
-        if tag_subs:
-            no_tags = [s for s in tag_subs if not s.get("tags") or s.get("tagCount", 0) == 0]
-            if no_tags:
-                synthetic += [{"problem": "Subscription has no tagging strategy configured",
-                               "impactedResource": s.get("name", s.get("Name", ""))} for s in no_tags]
-                self.action_items.append({
-                    "pillar": "Operational Excellence",
-                    "severity": "medium",
-                    "title": f"{len(no_tags)} Subscriptions have no tags",
-                    "description": "Implement a tagging strategy (Owner, CostCenter, Environment, Application) for governance and cost allocation.",
-                    "resources": [s.get("name", s.get("Name", "")) for s in no_tags[:10]]
-                })
+        # Tag coverage — computed from the per-resource `tags` field across Discovery inventory
+        # sheets (there's no dedicated tag-usage export; GovViz's Subscriptions.tags is subscription-level only).
+        TAGGABLE_SHEETS = ["VMs", "AppServices", "AKS", "VNets", "NSGs", "LoadBalancers",
+                           "Firewalls", "PublicIPs", "Storage", "Databases", "KeyVaults"]
+        discovery = self.data.get("discovery", {})
+        total_taggable, untagged_names = 0, []
+        for sheet in TAGGABLE_SHEETS:
+            for r in discovery.get(sheet, []):
+                total_taggable += 1
+                tags = r.get("tags")
+                if not tags or str(tags).strip().lower() in ("", "none", "{}"):
+                    untagged_names.append(r.get("name", r.get("Name", "")))
+        if total_taggable > 0 and untagged_names:
+            pct_untagged = len(untagged_names) / total_taggable * 100
+            synthetic += [{"problem": "Resource has no tags configured", "impactedResource": n} for n in untagged_names]
+            self.action_items.append({
+                "pillar": "Operational Excellence",
+                "severity": "medium",
+                "title": f"{len(untagged_names)}/{total_taggable} resources have no tags ({pct_untagged:.0f}%)",
+                "description": "Implement a tagging strategy (Owner, CostCenter, Environment, Application) for governance and cost allocation.",
+                "resources": untagged_names[:10]
+            })
+        
+        # Resource locks (protects against accidental delete/modify of critical resources)
+        locks = self.data.get("governance", {}).get("Locks", [])
+        has_locks = locks and not (len(locks) == 1 and locks[0].get("Result"))
+        if not has_locks:
+            self.action_items.append({
+                "pillar": "Operational Excellence",
+                "severity": "medium",
+                "title": "No resource locks configured",
+                "description": "Apply CanNotDelete or ReadOnly locks to critical resources (networking, databases, key vaults) to prevent accidental deletion or modification.",
+                "resources": []
+            })
         
         # Policy compliance
         compliance = self.data.get("governance", {}).get("PolicyCompliance", [])
@@ -674,9 +724,49 @@ class InsightEngine:
 class DashboardGenerator:
     """Generates the final consolidated HTML dashboard."""
     
-    def __init__(self, engine: InsightEngine, data: dict):
+    def __init__(self, engine: InsightEngine, data: dict, base_dir: Optional[str] = None):
         self.engine = engine
         self.data = data
+        self.base_dir = base_dir
+
+    @staticmethod
+    def _count_real(rows: list) -> int:
+        """Count sheet rows, ignoring the Export-Sheet 'No data found' placeholder row."""
+        if not rows or (len(rows) == 1 and rows[0].get("Result")):
+            return 0
+        return len(rows)
+
+    def _render_governance_overview(self) -> str:
+        """Surface GovViz data (RBAC, policy, locks, management groups) that isn't reflected in pillar scores."""
+        gov = self.data.get("governance", {})
+        stats = [
+            ("Management Groups", self._count_real(gov.get("MgmtGroups", []))),
+            ("Policy Assignments", self._count_real(gov.get("PolicyAssignments", []))),
+            ("Custom Policies", self._count_real(gov.get("CustomPolicies", []))),
+            ("Role Assignments", self._count_real(gov.get("RoleAssignments", []))),
+            ("Custom Roles", self._count_real(gov.get("CustomRoles", []))),
+            ("Resource Locks", self._count_real(gov.get("Locks", []))),
+        ]
+        stat_boxes = "".join(
+            f'<div class="stat-box"><div class="value">{count:,}</div><div class="label">{label}</div></div>'
+            for label, count in stats
+        )
+
+        report_html = ""
+        if self.base_dir:
+            report_path = os.path.join(self.base_dir, "04_Governance", "AzureGovernance.html")
+            if os.path.exists(report_path):
+                report_html = """<div class="governance-embed">
+            <div class="governance-embed-toolbar">
+                <a href="../04_Governance/AzureGovernance.html" target="_blank">Open full Governance Visualizer report (Hierarchy Map, Tenant Summary, Scope Insights) in a new tab \u2197</a>
+            </div>
+            <iframe src="../04_Governance/AzureGovernance.html" loading="lazy"></iframe>
+        </div>"""
+        if not report_html:
+            report_html = '<p class="breakdown-note">Governance Visualizer HTML report not found (04_Governance/AzureGovernance.html) — run Invoke-AzureGovernanceViz-CloudShell.ps1 to generate it.</p>'
+
+        return f"""<div class="stats-row">{stat_boxes}</div>
+        {report_html}"""
 
     def _render_score_breakdown(self) -> str:
         """Render the 'why' behind each pillar score per the Advisor Score model."""
@@ -739,6 +829,7 @@ class DashboardGenerator:
         overall = self.engine.get_overall_score()
         scores = self.engine.scores
         score_breakdown_html = self._render_score_breakdown()
+        governance_overview_html = self._render_governance_overview()
         action_items = sorted(self.engine.action_items, 
                             key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(x["severity"], 5))
         
@@ -879,6 +970,18 @@ body {{
 .breakdown-score {{ color: #0078D4; }}
 .breakdown-note {{ font-size: 12px; color: #666; }}
 
+/* Governance Visualizer embed */
+.governance-embed {{ margin-top: 16px; }}
+.governance-embed-toolbar {{
+    background: white; border-radius: 8px 8px 0 0; padding: 10px 16px;
+    border: 1px solid #ddd; border-bottom: none; font-size: 12px;
+}}
+.governance-embed-toolbar a {{ color: #0078D4; text-decoration: none; font-weight: 600; }}
+.governance-embed iframe {{
+    width: 100%; height: 700px; border: 1px solid #ddd; border-radius: 0 0 8px 8px;
+    background: white;
+}}
+
 /* Stats */
 .stats-row {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -986,6 +1089,12 @@ tr:hover td {{ background: #f8fbff; }}
     </div>
 </div>
 
+<!-- Governance Visualizer -->
+<div class="section">
+    <div class="section-title">🏛️ Governance Visualizer</div>
+    {governance_overview_html}
+</div>
+
 <!-- Action Items -->
 <div class="section">
     <div class="section-title">🎯 Action Items ({total_actions})</div>
@@ -1061,7 +1170,7 @@ def main():
     
     # Generate dashboard
     print("\n🎨 Generating dashboard HTML...")
-    generator = DashboardGenerator(engine, data)
+    generator = DashboardGenerator(engine, data, base_dir)
     html = generator.generate()
     
     output_path = os.path.join(base_dir, "05_Dashboard", "WAF_Dashboard.html")
