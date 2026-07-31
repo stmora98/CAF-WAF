@@ -8,22 +8,23 @@
       2. Invoke-AzureAdvisor-CloudShell.ps1         (Advisor recommendations)
       3. Invoke-AzureMetrics-CloudShell.ps1         (Right-sizing & reliability)
       4. Invoke-AzureGovernanceViz-CloudShell.ps1   (Governance + HTML report)
+      5. generate-dashboard.py                      (Consolidated dashboard + action items)
     
-    All outputs are consolidated into a single timestamped folder.
-    After completion, run the Python dashboard agent to generate the final report.
+    All outputs are consolidated into a single timestamped folder
+    created alongside the scripts.
 
 .PARAMETER OutputDir
-    Base output directory. Defaults to ~/AzureWorkshop_<timestamp>
+    Base output directory. Defaults to ./AzureWorkshop_<timestamp> (same folder as scripts)
 
 .PARAMETER SkipMetrics
-    Skip the metrics script (it's slower, queries per-resource). Use if short on time.
+    Skip the metrics script (it is slower, queries per-resource). Use if short on time.
 
 .EXAMPLE
     ./Launch-AzureWorkshop.ps1
     ./Launch-AzureWorkshop.ps1 -SkipMetrics
 
 .NOTES
-    Run in Azure Cloud Shell (PowerShell) with Reader access on subscriptions.
+    Run in Azure Cloud Shell (PowerShell) or locally with Az modules installed.
 #>
 
 [CmdletBinding()]
@@ -34,9 +35,11 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 
 if (-not $OutputDir) {
-    $OutputDir = "$HOME/AzureWorkshop_$timestamp"
+    $OutputDir = Join-Path $scriptDir "AzureWorkshop_$timestamp"
 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -46,7 +49,7 @@ New-Item -ItemType Directory -Path "$OutputDir/03_Metrics" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/04_Governance" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/05_Dashboard" -Force | Out-Null
 
-# ─── Ensure modules ──────────────────────────────────────────────────────────
+# --- Ensure modules ---
 Write-Host "Checking prerequisites..." -ForegroundColor Yellow
 
 $requiredModules = @(
@@ -83,10 +86,10 @@ if ($pythonCmd) {
         & $pythonCmd -m pip install openpyxl --quiet --user 2>$null
     }
 } else {
-    Write-Host "  ⚠️ Python not found - dashboard generation will need manual pip install" -ForegroundColor DarkYellow
+    Write-Host "  Python not found - dashboard generation will be skipped" -ForegroundColor DarkYellow
 }
 
-Write-Host "  ✓ All prerequisites satisfied.`n" -ForegroundColor Green
+Write-Host "  All prerequisites satisfied.`n" -ForegroundColor Green
 
 $context = Get-AzContext
 if (-not $context) {
@@ -95,124 +98,76 @@ if (-not $context) {
     $context = Get-AzContext
 }
 
-Write-Host @"
-
-╔═══════════════════════════════════════════════════════════════╗
-║         Azure WAF/CAF Workshop - Discovery Launcher          ║
-╠═══════════════════════════════════════════════════════════════╣
-║  Tenant:  $($context.Tenant.Id)      ║
-║  Account: $($context.Account.Id)                      ║
-║  Output:  $OutputDir    ║
-╚═══════════════════════════════════════════════════════════════╝
-
-"@ -ForegroundColor Cyan
+Write-Host "Azure WAF/CAF Workshop - Discovery Launcher" -ForegroundColor Cyan
+Write-Host "Tenant:  $($context.Tenant.Id)" -ForegroundColor Cyan
+Write-Host "Account: $($context.Account.Id)" -ForegroundColor Cyan
+Write-Host "Output:  $OutputDir`n" -ForegroundColor Cyan
 
 $startTime = Get-Date
-$scriptDir = $PSScriptRoot
-if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 1: Resource Discovery
-# ═══════════════════════════════════════════════════════════════════════════════
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-Write-Host " PHASE 1/4: Resource Discovery" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-
+# === PHASE 1: Resource Discovery ===
+Write-Host " PHASE 1/5: Resource Discovery" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/01_Discovery"
 try {
-    # Inline the discovery logic with redirected output path
-    $discoveryOutput = "$OutputDir/01_Discovery/AzureDiscovery.xlsx"
     & "$scriptDir/Invoke-AzureDiscovery-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-    # Move output file if it was created in $HOME
-    $latestDiscovery = Get-ChildItem "$HOME/AzureDiscovery_*.xlsx" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($latestDiscovery) {
-        Move-Item $latestDiscovery.FullName "$OutputDir/01_Discovery/AzureDiscovery.xlsx" -Force
-    }
 } catch {
-    Write-Host "  ⚠️ Discovery script encountered an error: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "  Discovery error: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 2: Advisor Recommendations
-# ═══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-Write-Host " PHASE 2/4: Advisor Recommendations" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-
+# === PHASE 2: Advisor Recommendations ===
+Write-Host "`n PHASE 2/5: Advisor Recommendations" -ForegroundColor Cyan
+$env:AZWORKSHOP_OUTPUT = "$OutputDir/02_Advisor"
 try {
     & "$scriptDir/Invoke-AzureAdvisor-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-    $latestAdvisor = Get-ChildItem "$HOME/AzureAdvisor_*.xlsx" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($latestAdvisor) {
-        Move-Item $latestAdvisor.FullName "$OutputDir/02_Advisor/AzureAdvisor.xlsx" -Force
-    }
 } catch {
-    Write-Host "  ⚠️ Advisor script encountered an error: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "  Advisor error: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 3: Metrics (Right-Sizing)
-# ═══════════════════════════════════════════════════════════════════════════════
+# === PHASE 3: Metrics (Right-Sizing) ===
 if (-not $SkipMetrics) {
-    Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-    Write-Host " PHASE 3/4: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-
+    Write-Host "`n PHASE 3/5: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
+    $env:AZWORKSHOP_OUTPUT = "$OutputDir/03_Metrics"
     try {
         & "$scriptDir/Invoke-AzureMetrics-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-        $latestMetrics = Get-ChildItem "$HOME/AzureMetrics_*.xlsx" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($latestMetrics) {
-            Move-Item $latestMetrics.FullName "$OutputDir/03_Metrics/AzureMetrics.xlsx" -Force
-        }
     } catch {
-        Write-Host "  ⚠️ Metrics script encountered an error: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  Metrics error: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkYellow
-    Write-Host " PHASE 3/4: Metrics - SKIPPED (use -SkipMetrics:$false to include)" -ForegroundColor DarkYellow
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkYellow
+    Write-Host "`n PHASE 3/5: Metrics - SKIPPED" -ForegroundColor DarkYellow
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 4: Governance Visualization
-# ═══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-Write-Host " PHASE 4/4: Governance Visualization" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-
+# === PHASE 4: Governance Visualization ===
+Write-Host "`n PHASE 4/5: Governance Visualization" -ForegroundColor Cyan
+$env:AZWORKSHOP_OUTPUT = "$OutputDir/04_Governance"
 try {
     & "$scriptDir/Invoke-AzureGovernanceViz-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-    $latestGov = Get-ChildItem "$HOME/AzGovViz_Lite_*" -Directory -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($latestGov) {
-        Get-ChildItem $latestGov.FullName | Move-Item -Destination "$OutputDir/04_Governance/" -Force
-        Remove-Item $latestGov.FullName -Force -Recurse -ErrorAction SilentlyContinue
-    }
 } catch {
-    Write-Host "  ⚠️ Governance script encountered an error: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "  Governance error: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SUMMARY
-# ═══════════════════════════════════════════════════════════════════════════════
+# === PHASE 5: Consolidated Dashboard ===
+Write-Host "`n PHASE 5/5: Generating Consolidated Dashboard" -ForegroundColor Cyan
+if ($pythonCmd) {
+    try {
+        & $pythonCmd "$scriptDir/generate-dashboard.py" $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
+        Write-Host "  Dashboard generated in $OutputDir/05_Dashboard/" -ForegroundColor Green
+    } catch {
+        Write-Host "  Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  Python not available. Run manually: python3 generate-dashboard.py `"$OutputDir`"" -ForegroundColor Yellow
+}
+
+# Clean up env var
+Remove-Item Env:\AZWORKSHOP_OUTPUT -ErrorAction SilentlyContinue
+
+# === SUMMARY ===
 $elapsed = (Get-Date) - $startTime
-
-Write-Host @"
-
-╔═══════════════════════════════════════════════════════════════╗
-║              ✅ ALL PHASES COMPLETE                            ║
-╠═══════════════════════════════════════════════════════════════╣
-║  Duration: $([math]::Round($elapsed.TotalMinutes, 1)) minutes                                       ║
-║  Output:   $OutputDir   ║
-╠═══════════════════════════════════════════════════════════════╣
-║  📁 01_Discovery/    - Resource inventory (Excel)             ║
-║  📁 02_Advisor/      - Advisor recommendations (Excel)        ║
-║  📁 03_Metrics/      - Right-sizing analysis (Excel)          ║
-║  📁 04_Governance/   - Governance report (HTML + Excel)       ║
-║  📁 05_Dashboard/    - (Run Python agent next)                ║
-╠═══════════════════════════════════════════════════════════════╣
-║                                                               ║
-║  NEXT STEP: Generate the consolidated dashboard:              ║
-║                                                               ║
-║    python3 generate-dashboard.py "$OutputDir"                 ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-"@ -ForegroundColor Green
+Write-Host "`nALL PHASES COMPLETE" -ForegroundColor Green
+Write-Host "Duration: $([math]::Round($elapsed.TotalMinutes, 1)) minutes" -ForegroundColor Green
+Write-Host "Output:   $OutputDir" -ForegroundColor Green
+Write-Host "  01_Discovery/    - Resource inventory (Excel)" -ForegroundColor White
+Write-Host "  02_Advisor/      - Advisor recommendations (Excel)" -ForegroundColor White
+Write-Host "  03_Metrics/      - Right-sizing analysis (Excel)" -ForegroundColor White
+Write-Host "  04_Governance/   - Governance report (HTML + Excel)" -ForegroundColor White
+Write-Host "  05_Dashboard/    - Consolidated dashboard (HTML)" -ForegroundColor White

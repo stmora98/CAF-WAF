@@ -23,7 +23,8 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$outputDir = "$HOME/AzGovViz_Lite_$timestamp"
+$_baseDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { "$HOME/AzGovViz_Lite_$timestamp" }
+$outputDir = $_baseDir
 $htmlFile = "$outputDir/AzureGovernance.html"
 $excelFile = "$outputDir/AzureGovernance.xlsx"
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null

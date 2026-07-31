@@ -3,7 +3,8 @@
   Exports all Advisor recommendations to Excel grouped by pillar.
 #>
 
-$outputFile = "$HOME/AzureAdvisor_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+$_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
+$outputFile = Join-Path $_outDir "AzureAdvisor_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
 
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force

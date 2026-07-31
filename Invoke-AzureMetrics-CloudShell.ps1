@@ -4,7 +4,8 @@
   Covers last 30 days of metric data.
 #>
 
-$outputFile = "$HOME/AzureMetrics_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+$_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
+$outputFile = Join-Path $_outDir "AzureMetrics_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
 $daysBack = 30
 $startTime = (Get-Date).AddDays(-$daysBack)
 $endTime = Get-Date

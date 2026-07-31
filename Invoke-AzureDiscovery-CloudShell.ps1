@@ -10,7 +10,8 @@
 #>
 
 # ─── Config ──────────────────────────────────────────────────────────────────
-$outputFile = "$HOME/AzureDiscovery_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+$_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
+$outputFile = Join-Path $_outDir "AzureDiscovery_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
 
 # ─── Install ImportExcel if missing ──────────────────────────────────────────
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
