@@ -159,6 +159,8 @@ Each script can also be run standalone:
 ./Invoke-AzureGovernanceViz-CloudShell.ps1  # Runs independently
 ./Invoke-AzureSecurity-CloudShell.ps1       # Runs independently; requests optional Graph scopes
 ./Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
+./Invoke-AzureSecurity-CloudShell.ps1 -SkipGraphSecurity     # Keep Cloud + Endpoint; skip Graph sign-in
+./Invoke-AzureSecurity-CloudShell.ps1 -MaxEndpointRecords 10000
 ./Invoke-AzureSecurity-CloudShell.ps1 -SkipDefenderPortal  # Defender for Cloud posture only
 ```
 
@@ -170,7 +172,7 @@ Each script can also be run standalone:
 | Microsoft Graph Security | Defender XDR incidents and alerts | Prompts for delegated consent when scopes are missing |
 | Defender for Endpoint API | Machines, security recommendations, vulnerabilities | Requires a compatible license, API role, and token audience |
 
-Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` means the source was queried successfully and returned no records; `Forbidden`, `Unavailable`, `Partial`, or `Skipped` means the assessment does not have complete visibility for that source.
+Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` means the source was queried successfully and returned no records; `Forbidden`, `Unavailable`, `Partial`, or `Skipped` means the assessment does not have complete visibility for that source. Defender for Endpoint datasets default to 5,000 records per sheet; reaching `-MaxEndpointRecords` is reported as `Partial` so the workbook closes predictably.
 
 ## Notes
 

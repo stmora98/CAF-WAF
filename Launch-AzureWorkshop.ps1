@@ -137,7 +137,8 @@ function Invoke-PhaseWithValidation {
         [string]$Name,
         [string]$ScriptPath,
         [string]$OutputFolder,
-        [int]$MaxAttempts = 3
+        [int]$MaxAttempts = 3,
+        [switch]$RequireWorkbook
     )
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
@@ -148,7 +149,14 @@ function Invoke-PhaseWithValidation {
 
         $xlsx = Get-ChildItem -Path $OutputFolder -Filter *.xlsx -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if (-not $xlsx) { return }
+        if (-not $xlsx) {
+            if (-not $RequireWorkbook) { return }
+            if ($attempt -lt $MaxAttempts) {
+                Write-Host "  ! $Name did not produce an Excel workbook (attempt $attempt/$MaxAttempts). Retrying..." -ForegroundColor DarkYellow
+                continue
+            }
+            throw "$Name failed to produce a required Excel workbook in $OutputFolder."
+        }
 
         $header = [byte[]]::new(4)
         $stream = [System.IO.File]::OpenRead($xlsx.FullName)
@@ -193,7 +201,7 @@ Invoke-PhaseWithValidation -Name "Governance" -ScriptPath "$scriptDir/Invoke-Azu
 # === PHASE 5: Security Assessment ===
 Write-Host "`n PHASE 5/6: Security Assessment" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/05_Security"
-Invoke-PhaseWithValidation -Name "Security" -ScriptPath "$scriptDir/Invoke-AzureSecurity-CloudShell.ps1" -OutputFolder "$OutputDir/05_Security"
+Invoke-PhaseWithValidation -Name "Security" -ScriptPath "$scriptDir/Invoke-AzureSecurity-CloudShell.ps1" -OutputFolder "$OutputDir/05_Security" -RequireWorkbook
 
 # === PHASE 6: Consolidated Dashboard ===
 Write-Host "`n PHASE 6/6: Generating Consolidated Dashboard" -ForegroundColor Cyan

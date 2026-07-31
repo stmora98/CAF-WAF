@@ -13,6 +13,13 @@
 .PARAMETER SkipDefenderPortal
     Skips Microsoft Graph Security and Defender for Endpoint collection.
 
+.PARAMETER SkipGraphSecurity
+    Skips interactive Microsoft Graph Security collection while retaining Defender
+    for Cloud and Defender for Endpoint data.
+
+.PARAMETER MaxEndpointRecords
+    Maximum records exported from each Defender for Endpoint API dataset.
+
 .EXAMPLE
     ./Invoke-AzureSecurity-CloudShell.ps1
     ./Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
@@ -22,7 +29,10 @@
 param(
     [ValidateRange(1, 365)]
     [int]$LookbackDays = 30,
-    [switch]$SkipDefenderPortal
+    [switch]$SkipDefenderPortal,
+    [switch]$SkipGraphSecurity,
+    [ValidateRange(1, 100000)]
+    [int]$MaxEndpointRecords = 5000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -342,11 +352,13 @@ function ConvertFrom-SecureAccessToken {
 function Invoke-DefenderEndpointPagedRequest {
     param(
         [string]$Uri,
-        [string]$AccessToken
+        [string]$AccessToken,
+        [int]$MaxRecords
     )
 
     $allRows = [System.Collections.Generic.List[object]]::new()
     $nextLink = $Uri
+    $truncated = $false
     $headers = @{ Authorization = "Bearer $AccessToken"; Accept = 'application/json' }
     while ($nextLink) {
         $attempt = 0
@@ -364,10 +376,23 @@ function Invoke-DefenderEndpointPagedRequest {
             }
         } while ($true)
 
-        foreach ($row in @($response.value)) { $allRows.Add($row) }
+        foreach ($row in @($response.value)) {
+            if ($allRows.Count -ge $MaxRecords) {
+                $truncated = $true
+                break
+            }
+            $allRows.Add($row)
+        }
         $nextLink = if ($response.'@odata.nextLink') { $response.'@odata.nextLink' } else { $null }
+        if ($allRows.Count -ge $MaxRecords -and $nextLink) {
+            $truncated = $true
+            break
+        }
     }
-    return $allRows.ToArray()
+    return [PSCustomObject]@{
+        Rows      = $allRows.ToArray()
+        Truncated = $truncated
+    }
 }
 
 function Invoke-DefenderEndpointCollection {
@@ -416,11 +441,14 @@ function Invoke-DefenderEndpointCollection {
 
     foreach ($collection in $collections) {
         try {
-            $rawRows = @(Invoke-DefenderEndpointPagedRequest -Uri $collection.Uri -AccessToken $accessToken)
+            $pageResult = Invoke-DefenderEndpointPagedRequest -Uri $collection.Uri -AccessToken $accessToken -MaxRecords $MaxEndpointRecords
+            $rawRows = @($pageResult.Rows)
             $mappedRows = @($rawRows | ForEach-Object { & $collection.Map $_ })
             Write-SecuritySheet -WorksheetName $collection.Sheet -Rows $mappedRows
-            Add-SourceStatus -Source $collection.Source -Status $(if ($mappedRows.Count) { 'Available' } else { 'NoData' }) `
-                -Records $mappedRows.Count -Details 'Collection completed.' -RequiredAccess $collection.Permission
+            $status = if ($pageResult.Truncated) { 'Partial' } elseif ($mappedRows.Count) { 'Available' } else { 'NoData' }
+            $details = if ($pageResult.Truncated) { "Collection limited to $MaxEndpointRecords records." } else { 'Collection completed.' }
+            Add-SourceStatus -Source $collection.Source -Status $status `
+                -Records $mappedRows.Count -Details $details -RequiredAccess $collection.Permission
         } catch {
             Add-SourceStatus -Source $collection.Source -Status (Get-SourceFailureStatus $_) -Records 0 `
                 -Details $_.Exception.Message -RequiredAccess $collection.Permission
@@ -455,7 +483,17 @@ if ($SkipDefenderPortal) {
         Write-SecuritySheet -WorksheetName $collection[1] -Rows @() -EmptyMessage 'Collection skipped by parameter.'
     }
 } else {
-    Invoke-GraphSecurityCollection
+    if ($SkipGraphSecurity) {
+        foreach ($collection in @(
+            @('Microsoft Graph Security incidents', 'Incidents'),
+            @('Microsoft Graph Security alerts', 'Alerts')
+        )) {
+            Add-SourceStatus -Source $collection[0] -Status 'Skipped' -Records 0 -Details 'Skipped by parameter.' -RequiredAccess ''
+            Write-SecuritySheet -WorksheetName $collection[1] -Rows @() -EmptyMessage 'Microsoft Graph Security collection skipped by parameter.'
+        }
+    } else {
+        Invoke-GraphSecurityCollection
+    }
     Invoke-DefenderEndpointCollection
 }
 

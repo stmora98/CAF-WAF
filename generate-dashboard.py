@@ -1197,7 +1197,7 @@ class DashboardGenerator:
             <div class="governance-embed-toolbar">
                 <a href="../04_Governance/AzureGovernance.html" target="_blank">{link_text}</a>
             </div>
-            <iframe src="../04_Governance/AzureGovernance.html" loading="lazy" onload="try{{const d=this.contentDocument;const panels=[...d.body.children];const fit=()=>{{const visible=panels.filter(el=>this.contentWindow.getComputedStyle(el).display!=='none');const bottom=Math.max(0,...visible.map(el=>el.offsetTop+el.offsetHeight));this.style.height=(bottom+2)+'px';}};fit();const observer=new ResizeObserver(fit);panels.forEach(el=>observer.observe(el));}}catch(e){{}}"></iframe>
+            <iframe id="governanceVisualizerFrame" src="../04_Governance/AzureGovernance.html" loading="lazy" onload="initializeGovernanceFrame(this)"></iframe>
         </div>"""
         if not report_html:
             note = bi(
@@ -1397,8 +1397,11 @@ class DashboardGenerator:
 <script>
     (() => {{
         const param = new URLSearchParams(window.location.search).get("scoutTheme");
-        const theme =
-            param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        let saved = null;
+        try {{ saved = localStorage.getItem("wafDashboardTheme"); }} catch (e) {{}}
+        const theme = ["light", "dark"].includes(param)
+            ? param
+            : (["light", "dark"].includes(saved) ? saved : "light");
         document.documentElement.setAttribute("data-theme", theme);
     }})();
 </script>
@@ -1580,7 +1583,7 @@ body.security-view .header {{
     .dashboard {{ padding: 12px; }}
     .header {{ padding: 64px 16px 24px; }}
     .header h1 {{ padding-right: 0; }}
-    .lang-toggle {{ top: 16px; right: 16px; }}
+    .header-controls {{ top: 16px; right: 16px; }}
     .score-section {{ grid-template-columns: minmax(0, 1fr); padding: 16px; }}
     .pillars-grid {{ grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); min-width: 0; }}
     .pillar-card {{ min-width: 0; }}
@@ -1689,17 +1692,24 @@ tr:hover td {{ background: var(--cp-accent-soft); }}
     border-top: 1px solid var(--cp-border); margin-top: 32px;
 }}
 
-/* Bilingual toggle (default: English shown, Spanish hidden) */
+/* Header controls and bilingual toggle (default: English shown, Spanish hidden) */
 .i18n-es {{ display: none; }}
 body.lang-es .i18n-en {{ display: none; }}
 body.lang-es .i18n-es {{ display: inline; }}
-.lang-toggle {{
+.header-controls {{
     position: absolute; top: 20px; right: 24px;
-    background: var(--cp-accent-hover); color: var(--cp-accent-fg);
-    border: 1px solid var(--cp-accent-fg); border-radius: 6px;
-    padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+    display: flex; gap: 8px;
 }}
-.lang-toggle:hover {{ background: var(--cp-accent); }}
+.header-control {{
+    background: #004f87; color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.78); border-radius: 6px;
+    height: 34px; min-width: 38px; padding: 0 12px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+}}
+.header-control:hover {{ background: #003f6c; }}
+body.security-view .header-control {{ background: #861532; }}
+body.security-view .header-control:hover {{ background: #6f1129; }}
+.theme-toggle {{ font-size: 18px; line-height: 1; padding: 0; }}
 </style>
 </head>
 <body>
@@ -1707,7 +1717,10 @@ body.lang-es .i18n-es {{ display: inline; }}
 
 <!-- Header -->
 <div class="header">
-    <button id="langToggleBtn" class="lang-toggle" onclick="toggleLang()" type="button">ES 🇪🇸</button>
+    <div class="header-controls">
+        <button id="themeToggleBtn" class="header-control theme-toggle" onclick="toggleTheme()" type="button" aria-label="Switch to night mode" title="Switch to night mode">☾</button>
+        <button id="langToggleBtn" class="header-control lang-toggle" onclick="toggleLang()" type="button">ES 🇪🇸</button>
+    </div>
     <h1>☁️ {bi("Azure WAF/CAF Workshop - Discovery Report", "Taller Azure WAF/CAF - Informe de Descubrimiento")}</h1>
     <div class="subtitle">{bi("Generated", "Generado")}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {bi("Consolidated view across all discovery phases", "Vista consolidada de todas las fases de descubrimiento")}</div>
 </div>
@@ -1803,11 +1816,96 @@ body.lang-es .i18n-es {{ display: inline; }}
 
 </div>
 <script>
+function syncGovernanceTheme() {{
+    var frame = document.getElementById('governanceVisualizerFrame');
+    if (!frame || !frame.contentDocument) return;
+    try {{
+        frame.contentDocument.documentElement.setAttribute(
+            'data-dashboard-theme',
+            document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+        );
+    }} catch (e) {{}}
+}}
+function initializeGovernanceFrame(frame) {{
+    try {{
+        var doc = frame.contentDocument;
+        if (!doc.getElementById('wafDashboardThemeBridge')) {{
+            var style = doc.createElement('style');
+            style.id = 'wafDashboardThemeBridge';
+            style.textContent = `
+html[data-dashboard-theme="dark"] {{ color-scheme: dark; }}
+html[data-dashboard-theme="dark"] body {{ background: #202020 !important; color: #dedede !important; }}
+html[data-dashboard-theme="dark"] .panel-hierarchy {{ background: #292929 !important; }}
+html[data-dashboard-theme="dark"] .panel-summary {{ background: #253442 !important; }}
+html[data-dashboard-theme="dark"] .panel-scope {{ background: #2e2e2e !important; }}
+html[data-dashboard-theme="dark"] .panel-header {{ border-bottom-color: #555 !important; }}
+html[data-dashboard-theme="dark"] .panel-hierarchy .panel-header {{ background: #292929 !important; color: #4da6ff !important; }}
+html[data-dashboard-theme="dark"] .panel-summary .panel-header {{ background: #253442 !important; color: #8cc8ff !important; }}
+html[data-dashboard-theme="dark"] .panel-scope .panel-header {{ background: #2e2e2e !important; color: #dedede !important; }}
+html[data-dashboard-theme="dark"] .stat-card,
+html[data-dashboard-theme="dark"] .mg-node,
+html[data-dashboard-theme="dark"] .sub-node {{ background: #343434 !important; color: #dedede !important; border-color: #5f5f5f !important; }}
+html[data-dashboard-theme="dark"] .stat-card .stat-label,
+html[data-dashboard-theme="dark"] .scope-id,
+html[data-dashboard-theme="dark"] .no-data {{ color: #b0b0b0 !important; }}
+html[data-dashboard-theme="dark"] .collapsible {{ background: #343434 !important; color: #dedede !important; border-color: #5f5f5f !important; }}
+html[data-dashboard-theme="dark"] .collapsible:hover {{ background: #414141 !important; }}
+html[data-dashboard-theme="dark"] .table-search,
+html[data-dashboard-theme="dark"] .btn-csv {{ background: #292929 !important; color: #dedede !important; border-color: #5f5f5f !important; }}
+html[data-dashboard-theme="dark"] .data-table th {{ background: #343434 !important; color: #dedede !important; border-color: #555 !important; }}
+html[data-dashboard-theme="dark"] .data-table td {{ color: #dedede !important; border-color: #474747 !important; }}
+html[data-dashboard-theme="dark"] .data-table tbody tr:nth-child(even) {{ background: #303030 !important; }}
+html[data-dashboard-theme="dark"] .data-table tbody tr:hover {{ background: #263e50 !important; }}
+`;
+            doc.head.appendChild(style);
+        }}
+        var panels = Array.from(doc.body.children);
+        var fit = function() {{
+            var visible = panels.filter(function(element) {{
+                return frame.contentWindow.getComputedStyle(element).display !== 'none';
+            }});
+            var bottom = Math.max(0, ...visible.map(function(element) {{
+                return element.offsetTop + element.offsetHeight;
+            }}));
+            frame.style.height = (bottom + 2) + 'px';
+        }};
+        fit();
+        var observer = new ResizeObserver(fit);
+        panels.forEach(function(element) {{ observer.observe(element); }});
+        syncGovernanceTheme();
+    }} catch (e) {{}}
+}}
+function updateThemeButton() {{
+    var btn = document.getElementById('themeToggleBtn');
+    if (!btn) return;
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var spanish = document.body.classList.contains('lang-es');
+    var label = dark
+        ? (spanish ? 'Cambiar a modo claro' : 'Switch to light mode')
+        : (spanish ? 'Cambiar a modo nocturno' : 'Switch to night mode');
+    btn.textContent = dark ? '☀' : '☾';
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-pressed', String(dark));
+}}
+function setTheme(theme, persist) {{
+    var normalized = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', normalized);
+    if (persist !== false) {{
+        try {{ localStorage.setItem('wafDashboardTheme', normalized); }} catch (e) {{}}
+    }}
+    updateThemeButton();
+    syncGovernanceTheme();
+}}
+function toggleTheme() {{
+    setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+}}
 function setLang(lang) {{
     document.body.classList.toggle('lang-es', lang === 'es');
     document.documentElement.lang = lang;
     var btn = document.getElementById('langToggleBtn');
     if (btn) {{ btn.textContent = lang === 'es' ? 'EN 🇬🇧' : 'ES 🇪🇸'; }}
+    updateThemeButton();
     try {{ localStorage.setItem('wafDashboardLang', lang); }} catch (e) {{}}
 }}
 function toggleLang() {{
@@ -1823,6 +1921,7 @@ function setDashboardView(view) {{
     try {{ localStorage.setItem('wafDashboardView', view); }} catch (e) {{}}
 }}
 (function() {{
+    setTheme(document.documentElement.getAttribute('data-theme') || 'light', false);
     var saved = 'en';
     try {{ saved = localStorage.getItem('wafDashboardLang') || 'en'; }} catch (e) {{}}
     setLang(saved);
