@@ -1428,6 +1428,10 @@ class DashboardGenerator:
     --cp-panel-strong: rgba(255, 255, 255, 0.96);
     --cp-sheen: rgba(255, 255, 255, 0.55);
     --cp-highlight: rgba(177, 31, 75, 0.12);
+    --overview-header-start: #0078d4;
+    --overview-header-end: #005a9e;
+    --security-header: #b11f4b;
+    --header-fg: #ffffff;
 }}
 html[data-theme="dark"] {{
     color-scheme: dark;
@@ -1454,6 +1458,10 @@ html[data-theme="dark"] {{
     --cp-panel-strong: rgba(41, 41, 41, 0.96);
     --cp-sheen: rgba(255, 255, 255, 0.04);
     --cp-highlight: rgba(253, 142, 161, 0.12);
+    --overview-header-start: #0078d4;
+    --overview-header-end: #005a9e;
+    --security-header: #b11f4b;
+    --header-fg: #ffffff;
 }}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
@@ -1465,9 +1473,13 @@ body {{
 
 /* Header */
 .header {{
-    background: var(--cp-accent);
-    color: var(--cp-accent-fg); padding: 32px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--overview-header-start), var(--overview-header-end));
+    color: var(--header-fg); padding: 32px; border-radius: 10px;
     margin-bottom: 24px; position: relative;
+}}
+body.security-view .header {{
+    background: var(--security-header);
+    color: var(--header-fg);
 }}
 .header h1 {{ font-size: 28px; margin-bottom: 8px; }}
 .header .subtitle {{ opacity: 0.85; font-size: 14px; }}
@@ -1803,6 +1815,7 @@ function toggleLang() {{
 }}
 function setDashboardView(view) {{
     var security = view === 'security';
+    document.body.classList.toggle('security-view', security);
     document.getElementById('overviewView').hidden = security;
     document.getElementById('securityView').hidden = !security;
     document.getElementById('overviewTab').setAttribute('aria-selected', String(!security));
