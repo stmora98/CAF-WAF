@@ -18,14 +18,19 @@ Requirements:
 import sys
 import os
 import json
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
+from zipfile import BadZipFile
 
 try:
     from openpyxl import load_workbook
+    from openpyxl.utils.exceptions import InvalidFileException
 except ImportError:
     os.system("pip install openpyxl --quiet")
     from openpyxl import load_workbook
+    from openpyxl.utils.exceptions import InvalidFileException
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -55,6 +60,16 @@ class DashboardConfig:
 
 class ExcelReader:
     """Reads Excel workbooks and returns structured data."""
+
+    @staticmethod
+    def find_workbook(base_dir: str, folder: str, prefix: str) -> Optional[str]:
+        """Return the newest workbook matching a phase's output prefix."""
+        phase_dir = Path(base_dir) / folder
+        candidates = list(phase_dir.glob(f"{prefix}*.xlsx"))
+        if not candidates:
+            print(f"  ! {prefix}: no workbook found in {phase_dir}")
+            return None
+        return str(max(candidates, key=lambda path: path.stat().st_mtime))
     
     @staticmethod
     def read_workbook(path: str) -> dict:
@@ -62,7 +77,11 @@ class ExcelReader:
         if not os.path.exists(path):
             return {}
         
-        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            wb = load_workbook(path, read_only=True, data_only=True)
+        except (BadZipFile, InvalidFileException, OSError) as exc:
+            print(f"  ! Skipping invalid workbook {path}: {exc}")
+            return {}
         result = {}
         
         for sheet_name in wb.sheetnames:
@@ -96,26 +115,26 @@ class ExcelReader:
         }
         
         # Discovery
-        path = os.path.join(base_dir, "01_Discovery", "AzureDiscovery.xlsx")
-        if os.path.exists(path):
+        path = ExcelReader.find_workbook(base_dir, "01_Discovery", "AzureDiscovery")
+        if path:
             data["discovery"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Discovery: {sum(len(v) for v in data['discovery'].values())} records across {len(data['discovery'])} sheets")
         
         # Advisor
-        path = os.path.join(base_dir, "02_Advisor", "AzureAdvisor.xlsx")
-        if os.path.exists(path):
+        path = ExcelReader.find_workbook(base_dir, "02_Advisor", "AzureAdvisor")
+        if path:
             data["advisor"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Advisor: {sum(len(v) for v in data['advisor'].values())} records across {len(data['advisor'])} sheets")
         
         # Metrics
-        path = os.path.join(base_dir, "03_Metrics", "AzureMetrics.xlsx")
-        if os.path.exists(path):
+        path = ExcelReader.find_workbook(base_dir, "03_Metrics", "AzureMetrics")
+        if path:
             data["metrics"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Metrics: {sum(len(v) for v in data['metrics'].values())} records across {len(data['metrics'])} sheets")
         
         # Governance
-        path = os.path.join(base_dir, "04_Governance", "AzureGovernance.xlsx")
-        if os.path.exists(path):
+        path = ExcelReader.find_workbook(base_dir, "04_Governance", "AzureGovernance")
+        if path:
             data["governance"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Governance: {sum(len(v) for v in data['governance'].values())} records across {len(data['governance'])} sheets")
         
@@ -123,11 +142,149 @@ class ExcelReader:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ADVISOR SCORE MODEL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AdvisorScoreModel:
+    """
+    Implements the official Azure Advisor Score methodology using the data this
+    toolkit collects.
+    Reference: https://learn.microsoft.com/en-us/azure/advisor/advisor-score#calculation-of-advisor-score
+
+    Official formula (Reliability / Performance / Operational Excellence):
+        Subcategory Score = (Healthy Resources / Total Applicable Resources) * 100
+        Category Score = sum((Healthy/Total) * SubcategoryWeight) / sum(SubcategoryWeight) * 100
+
+    Deviations from the live Advisor score (documented, not hidden):
+      - Subcategory weights below are copied verbatim from the Microsoft Learn doc.
+      - Recommendations are mapped to subcategories via keyword matching on the
+        recommendation problem/solution text, because Azure Resource Graph does not
+        expose Advisor's internal subcategory tag.
+      - "Total Applicable Resources" uses the total discovered resource inventory
+        (01_Discovery/ResourceSummary) as a shared pool, because Advisor's exact
+        per-subcategory assessed-resource counts aren't exposed outside the portal.
+      - Security score uses the Microsoft Defender Secure Score directly (the same
+        model Advisor uses for this category), read from 04_Governance/SecureScores.
+      - Cost score uses a resource-count healthy ratio instead of retail-cost
+        weighting, because this toolkit doesn't call the Azure Retail Prices API.
+    """
+
+    RELIABILITY_WEIGHTS = {
+        "Zone Resiliency": 30,
+        "Regional Resiliency": 25,
+        "Data Protection and Recovery": 20,
+        "Governance and Compliance": 10,
+        "Scalability": 10,
+        "Monitoring and Alerting": 5,
+        "Service Upgrade and Retirement": 5,
+        "Other": 5,
+    }
+    PERFORMANCE_WEIGHTS = {
+        "Compute Optimization": 25,
+        "Storage Optimization": 25,
+        "Network Optimization": 25,
+        "Data Performance": 20,
+        "Scalability": 10,
+        "Monitoring and Alerting": 5,
+        "Service Upgrade and Retirement": 5,
+        "Other": 5,
+    }
+    OPERATIONAL_WEIGHTS = {
+        "Efficiency Optimization": 30,
+        "Failure Mitigation": 20,
+        "Scalability": 10,
+        "Monitoring and Alerting": 5,
+        "Safe and Secure Deployment": 5,
+        "Service Upgrade and Retirement": 5,
+        "Other": 5,
+    }
+
+    RELIABILITY_RULES = [
+        ("Zone Resiliency", ["availability zone", "zone redundant", "zone-redundant", "zonal"]),
+        ("Regional Resiliency", ["paired region", "geo-redundant", "geo redundant", "multi-region", "georeplication", "geo replication", "ddos"]),
+        ("Data Protection and Recovery", ["backup", "recovery vault", "restore", "snapshot", "soft delete", "point-in-time"]),
+        ("Governance and Compliance", ["policy", "compliance", "governance"]),
+        ("Scalability", ["scale", "autoscale", "throughput", "capacity"]),
+        ("Monitoring and Alerting", ["diagnostic", "alert", "monitor", "log analytics", "insights"]),
+        ("Service Upgrade and Retirement", ["upgrade", "retire", "deprecat", "migrate", "end of life", "eol", "outdated version"]),
+    ]
+    PERFORMANCE_RULES = [
+        ("Compute Optimization", ["virtual machine", "vm", "app service plan", "compute"]),
+        ("Storage Optimization", ["storage account", "disk", "data warehouse", "blob"]),
+        ("Network Optimization", ["traffic manager", "network", "express route", "vpn", "load balancer", "cdn", "front door"]),
+        ("Data Performance", ["sql", "database", "cosmos", "query"]),
+        ("Scalability", ["scale", "autoscale", "throughput", "capacity"]),
+        ("Monitoring and Alerting", ["diagnostic", "alert", "monitor", "log analytics", "insights"]),
+        ("Service Upgrade and Retirement", ["upgrade", "retire", "deprecat", "migrate", "end of life", "eol", "outdated version"]),
+    ]
+    OPERATIONAL_RULES = [
+        ("Efficiency Optimization", ["accelerated networking", "efficiency", "configuration"]),
+        ("Failure Mitigation", ["failure", "deployment failure", "resiliency", "mitigat"]),
+        ("Safe and Secure Deployment", ["safe deployment", "secure deployment", "rollout", "blue-green", "canary", "staged rollout"]),
+        ("Scalability", ["scale", "autoscale", "throughput", "capacity"]),
+        ("Monitoring and Alerting", ["diagnostic", "alert", "monitor", "log analytics", "insights"]),
+        ("Service Upgrade and Retirement", ["upgrade", "retire", "deprecat", "migrate", "end of life", "eol", "outdated version"]),
+    ]
+
+    @staticmethod
+    def classify(text: str, rules) -> str:
+        t = (text or "").lower()
+        for subcategory, keywords in rules:
+            for kw in keywords:
+                if re.search(r"\b" + re.escape(kw.strip()) + r"\b", t):
+                    return subcategory
+        return "Other"
+
+    @staticmethod
+    def bucket(records, rules) -> dict:
+        """Group impacted-resource keys into subcategories via keyword classification."""
+        buckets = {}
+        for rec in records:
+            text = " ".join(str(rec.get(f, "")) for f in ("problem", "solution", "impactedType", "title"))
+            subcategory = AdvisorScoreModel.classify(text, rules)
+            key = str(rec.get("impactedResource") or rec.get("name") or rec.get("Name") or id(rec))
+            buckets.setdefault(subcategory, set()).add(key)
+        return buckets
+
+    @staticmethod
+    def merge_buckets(*bucket_dicts) -> dict:
+        merged = {}
+        for buckets in bucket_dicts:
+            for subcategory, keys in buckets.items():
+                merged.setdefault(subcategory, set()).update(keys)
+        return merged
+
+    @staticmethod
+    def score_category(weights: dict, buckets: dict, total_pool: int, forced_zero: set = frozenset()):
+        """Official formula: sum((Healthy/Total)*Weight) / sum(Weight) * 100."""
+        if total_pool <= 0:
+            return None, []
+        rows = []
+        weighted_sum = 0.0
+        weight_total = 0
+        for subcategory, weight in weights.items():
+            if subcategory in forced_zero:
+                impacted = total_pool
+            else:
+                impacted = min(len(buckets.get(subcategory, set())), total_pool)
+            healthy = max(0, total_pool - impacted)
+            pct = (healthy / total_pool) * 100
+            weighted_sum += pct * weight
+            weight_total += weight
+            rows.append({
+                "subcategory": subcategory, "weight": weight,
+                "healthy": healthy, "total": total_pool, "pct": round(pct, 1)
+            })
+        score = weighted_sum / weight_total if weight_total else None
+        return (round(score) if score is not None else None), rows
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # ANALYSIS ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class InsightEngine:
-    """Analyzes collected data and generates insights + action items."""
+    """Analyzes collected data, scores each WAF pillar, and generates action items."""
     
     def __init__(self, data: dict):
         self.data = data
@@ -140,7 +297,13 @@ class InsightEngine:
             "Operational Excellence": 0,
             "Performance Efficiency": 0
         }
+        self.breakdowns = {}
         self.max_score = 100
+
+    def _resource_pool(self) -> int:
+        """Total discovered resources, used as the shared 'assessed resource' pool."""
+        summary = self.data.get("discovery", {}).get("ResourceSummary", [])
+        return sum(int(r.get("Count", 0) or 0) for r in summary)
     
     def analyze(self):
         """Run all analysis passes."""
@@ -152,15 +315,17 @@ class InsightEngine:
         return self
     
     def _analyze_reliability(self):
-        """Assess reliability posture."""
-        score = 100
-        
+        """Reliability score using the official Advisor Score subcategory model."""
+        total_pool = self._resource_pool()
+        forced_zero = set()
+        synthetic = []
+
         # Check VMs without availability zones
         vms = self.data.get("discovery", {}).get("VMs", [])
         vms_no_zone = [v for v in vms if not v.get("zone") and not v.get("availabilityZone")]
+        synthetic += [{"problem": "Virtual machine not deployed to an Availability Zone",
+                       "impactedResource": v.get("name", v.get("Name", ""))} for v in vms_no_zone]
         if vms_no_zone:
-            deduction = min(30, len(vms_no_zone) * 3)
-            score -= deduction
             self.action_items.append({
                 "pillar": "Reliability",
                 "severity": "high",
@@ -172,7 +337,7 @@ class InsightEngine:
         # Check backup vaults
         backups = self.data.get("discovery", {}).get("BackupVaults", [])
         if not backups or (len(backups) == 1 and backups[0].get("Result") == "No resources found"):
-            score -= 20
+            forced_zero.add("Data Protection and Recovery")
             self.action_items.append({
                 "pillar": "Reliability",
                 "severity": "critical",
@@ -184,8 +349,9 @@ class InsightEngine:
         # Check DDoS protection on VNets
         vnets = self.data.get("discovery", {}).get("VNets", []) or self.data.get("governance", {}).get("VNets", [])
         vnets_no_ddos = [v for v in vnets if str(v.get("ddos", v.get("ddosProtection", v.get("enableDdosProtection", "")))).lower() in ("false", "", "none")]
+        synthetic += [{"problem": "VNet without DDoS Protection Standard",
+                       "impactedResource": v.get("name", v.get("Name", ""))} for v in vnets_no_ddos]
         if vnets_no_ddos:
-            score -= 10
             self.action_items.append({
                 "pillar": "Reliability",
                 "severity": "medium",
@@ -198,7 +364,6 @@ class InsightEngine:
         ha_recs = self.data.get("advisor", {}).get("Reliability", [])
         high_impact_ha = [r for r in ha_recs if str(r.get("impact", "")).lower() == "high"]
         if high_impact_ha:
-            score -= min(20, len(high_impact_ha) * 2)
             self.action_items.append({
                 "pillar": "Reliability",
                 "severity": "high",
@@ -206,31 +371,34 @@ class InsightEngine:
                 "description": "Azure Advisor has identified critical reliability improvements.",
                 "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in high_impact_ha[:10]]
             })
-        
-        self.scores["Reliability"] = max(0, score)
+
+        buckets = AdvisorScoreModel.merge_buckets(
+            AdvisorScoreModel.bucket(ha_recs, AdvisorScoreModel.RELIABILITY_RULES),
+            AdvisorScoreModel.bucket(synthetic, AdvisorScoreModel.RELIABILITY_RULES),
+        )
+        score, rows = AdvisorScoreModel.score_category(
+            AdvisorScoreModel.RELIABILITY_WEIGHTS, buckets, total_pool, forced_zero)
+        self.scores["Reliability"] = score if score is not None else 0
+        self.breakdowns["Reliability"] = {"available": score is not None, "rows": rows, "pool": total_pool}
     
     def _analyze_security(self):
-        """Assess security posture."""
-        score = 100
-        
-        # Secure score from Defender
+        """Security score = Microsoft Defender Secure Score average (same model Advisor uses)."""
         secure_scores = self.data.get("governance", {}).get("SecureScores", [])
+        avg_score = None
         if secure_scores:
-            avg_score = sum(float(s.get("pct", s.get("percentage", 0)) or 0) for s in secure_scores) / len(secure_scores)
-            if avg_score < 0.5:
-                score -= 30
-            elif avg_score < 0.7:
-                score -= 15
+            values = [float(s.get("pct", s.get("percentage", 0)) or 0) for s in secure_scores]
+            avg_score = sum(values) / len(values)
+            if avg_score <= 1:  # export may store a 0-1 ratio instead of 0-100
+                avg_score *= 100
             self.insights.append({
                 "pillar": "Security",
-                "text": f"Average Defender Secure Score: {avg_score*100:.0f}%"
+                "text": f"Average Defender Secure Score: {avg_score:.0f}%"
             })
         
         # Storage accounts with public access
         storage = self.data.get("discovery", {}).get("Storage", [])
         public_storage = [s for s in storage if str(s.get("publicBlob", s.get("allowBlobPublicAccess", ""))).lower() == "true"]
         if public_storage:
-            score -= min(25, len(public_storage) * 5)
             self.action_items.append({
                 "pillar": "Security",
                 "severity": "critical",
@@ -243,7 +411,6 @@ class InsightEngine:
         keyvaults = self.data.get("discovery", {}).get("KeyVaults", []) or self.data.get("governance", {}).get("KeyVaults", [])
         kv_no_purge = [k for k in keyvaults if str(k.get("purgeProtection", k.get("enablePurgeProtection", ""))).lower() in ("false", "", "none")]
         if kv_no_purge:
-            score -= min(15, len(kv_no_purge) * 3)
             self.action_items.append({
                 "pillar": "Security",
                 "severity": "high",
@@ -255,7 +422,6 @@ class InsightEngine:
         # Storage without TLS 1.2
         old_tls = [s for s in storage if s.get("tlsVersion", s.get("minimumTlsVersion", "")) and "1.2" not in str(s.get("tlsVersion", s.get("minimumTlsVersion", "")))]
         if old_tls:
-            score -= min(15, len(old_tls) * 3)
             self.action_items.append({
                 "pillar": "Security",
                 "severity": "high",
@@ -264,10 +430,9 @@ class InsightEngine:
                 "resources": [s.get("name", s.get("Name", "")) for s in old_tls[:10]]
             })
         
-        # Security advisor recommendations
+        # Security advisor recommendations (informational — already reflected in Secure Score)
         sec_recs = self.data.get("advisor", {}).get("Security", [])
         if sec_recs:
-            score -= min(20, len(sec_recs) * 2)
             self.action_items.append({
                 "pillar": "Security",
                 "severity": "medium",
@@ -276,11 +441,18 @@ class InsightEngine:
                 "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in sec_recs[:10]]
             })
         
-        self.scores["Security"] = max(0, score)
+        self.scores["Security"] = round(avg_score) if avg_score is not None else 0
+        self.breakdowns["Security"] = {
+            "available": avg_score is not None,
+            "secure_score_pct": round(avg_score, 1) if avg_score is not None else None,
+            "subscriptions_scored": len(secure_scores),
+        }
     
     def _analyze_cost(self):
-        """Assess cost optimization opportunities."""
-        score = 100
+        """Cost score = healthy-resource ratio (count-based proxy for Advisor's retail-cost weighting)."""
+        total_pool = self._resource_pool()
+        impacted_keys = set()
+        sources = []
         
         # Orphaned resources
         orphaned = self.data.get("governance", {}).get("OrphanedResources", [])
@@ -291,7 +463,9 @@ class InsightEngine:
             orphaned = disks + dealloc
         
         if orphaned:
-            score -= min(25, len(orphaned) * 2)
+            keys = {str(o.get("Name", o.get("name", id(o)))) for o in orphaned}
+            impacted_keys |= keys
+            sources.append(("Orphaned/unused resources", len(keys)))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "medium",
@@ -303,7 +477,9 @@ class InsightEngine:
         # VMs that are deallocated (still paying for disks)
         dealloc_vms = self.data.get("discovery", {}).get("DeallocatedVMs", [])
         if dealloc_vms and not (len(dealloc_vms) == 1 and dealloc_vms[0].get("Result")):
-            score -= min(15, len(dealloc_vms) * 2)
+            keys = {str(v.get("name", v.get("Name", id(v)))) for v in dealloc_vms}
+            impacted_keys |= keys
+            sources.append(("Deallocated VMs", len(keys)))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "low",
@@ -316,7 +492,9 @@ class InsightEngine:
         vm_metrics = self.data.get("metrics", {}).get("VM_RightSizing", [])
         underutilized = [v for v in vm_metrics if "Idle" in str(v.get("Assessment", "")) or "Underutilized" in str(v.get("Assessment", ""))]
         if underutilized:
-            score -= min(20, len(underutilized) * 3)
+            keys = {str(v.get("Name", id(v))) for v in underutilized}
+            impacted_keys |= keys
+            sources.append(("Idle/underutilized VMs", len(keys)))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "high",
@@ -328,9 +506,11 @@ class InsightEngine:
         # Cost recommendations from Advisor
         cost_recs = self.data.get("advisor", {}).get("Cost", [])
         if cost_recs:
+            keys = {str(r.get("impactedResource", r.get("impactedValue", id(r)))) for r in cost_recs}
+            impacted_keys |= keys
+            sources.append(("Advisor Cost recommendations", len(keys)))
             total_savings = sum(float(r.get("annualSavings", r.get("savingsAmount", 0)) or 0) for r in cost_recs)
-            score -= min(20, len(cost_recs) * 2)
-            desc = f"Azure Advisor estimates potential savings."
+            desc = "Azure Advisor estimates potential savings."
             if total_savings > 0:
                 desc = f"Azure Advisor estimates ~${total_savings:,.0f} in potential annual savings."
             self.action_items.append({
@@ -341,11 +521,25 @@ class InsightEngine:
                 "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in cost_recs[:10]]
             })
         
-        self.scores["Cost Optimization"] = max(0, score)
+        if total_pool > 0:
+            impacted = min(len(impacted_keys), total_pool)
+            healthy = max(0, total_pool - impacted)
+            score = round((healthy / total_pool) * 100)
+        else:
+            healthy, score = 0, None
+        
+        self.scores["Cost Optimization"] = score if score is not None else 0
+        self.breakdowns["Cost Optimization"] = {
+            "available": score is not None,
+            "sources": sources,
+            "healthy": healthy,
+            "total": total_pool,
+        }
     
     def _analyze_operational_excellence(self):
-        """Assess operational excellence."""
-        score = 100
+        """Operational Excellence score using the official Advisor Score subcategory model."""
+        total_pool = self._resource_pool()
+        synthetic = []
         
         # Diagnostic settings coverage
         diag = self.data.get("metrics", {}).get("DiagnosticsCoverage", [])
@@ -353,7 +547,8 @@ class InsightEngine:
             no_diag = [d for d in diag if str(d.get("HasDiagnostics", d.get("Gap", ""))).lower() in ("false", "no diagnostics configured")]
             if no_diag:
                 pct_missing = len(no_diag) / len(diag) * 100
-                score -= min(25, int(pct_missing / 4))
+                synthetic += [{"problem": "Resource missing diagnostic settings",
+                               "impactedResource": d.get("Name", d.get("name", ""))} for d in no_diag]
                 self.action_items.append({
                     "pillar": "Operational Excellence",
                     "severity": "high",
@@ -367,7 +562,8 @@ class InsightEngine:
         if tag_subs:
             no_tags = [s for s in tag_subs if not s.get("tags") or s.get("tagCount", 0) == 0]
             if no_tags:
-                score -= min(15, len(no_tags) * 5)
+                synthetic += [{"problem": "Subscription has no tagging strategy configured",
+                               "impactedResource": s.get("name", s.get("Name", ""))} for s in no_tags]
                 self.action_items.append({
                     "pillar": "Operational Excellence",
                     "severity": "medium",
@@ -380,10 +576,9 @@ class InsightEngine:
         compliance = self.data.get("governance", {}).get("PolicyCompliance", [])
         if compliance:
             total_nc = sum(int(c.get("NonCompliantCount", 0) or 0) for c in compliance)
-            if total_nc > 100:
-                score -= 20
-            elif total_nc > 20:
-                score -= 10
+            non_compliant = [c for c in compliance if int(c.get("NonCompliantCount", 0) or 0) > 0]
+            synthetic += [{"problem": "Non-compliant policy evaluation",
+                           "impactedResource": c.get("policyAssignment", c.get("policyAssignmentName", ""))} for c in non_compliant]
             if total_nc > 0:
                 self.action_items.append({
                     "pillar": "Operational Excellence",
@@ -396,19 +591,33 @@ class InsightEngine:
         # OpEx Advisor recommendations
         opex_recs = self.data.get("advisor", {}).get("OperationalExcellence", [])
         if opex_recs:
-            score -= min(15, len(opex_recs))
-        
-        self.scores["Operational Excellence"] = max(0, score)
+            self.action_items.append({
+                "pillar": "Operational Excellence",
+                "severity": "medium",
+                "title": f"{len(opex_recs)} Operational Excellence recommendations from Advisor",
+                "description": "Azure Advisor has identified operational improvements.",
+                "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in opex_recs[:10]]
+            })
+
+        buckets = AdvisorScoreModel.merge_buckets(
+            AdvisorScoreModel.bucket(opex_recs, AdvisorScoreModel.OPERATIONAL_RULES),
+            AdvisorScoreModel.bucket(synthetic, AdvisorScoreModel.OPERATIONAL_RULES),
+        )
+        score, rows = AdvisorScoreModel.score_category(AdvisorScoreModel.OPERATIONAL_WEIGHTS, buckets, total_pool)
+        self.scores["Operational Excellence"] = score if score is not None else 0
+        self.breakdowns["Operational Excellence"] = {"available": score is not None, "rows": rows, "pool": total_pool}
     
     def _analyze_performance(self):
-        """Assess performance efficiency."""
-        score = 100
+        """Performance score using the official Advisor Score subcategory model."""
+        total_pool = self._resource_pool()
+        synthetic = []
         
         # Saturated VMs
         vm_metrics = self.data.get("metrics", {}).get("VM_RightSizing", [])
         saturated = [v for v in vm_metrics if "Saturated" in str(v.get("Assessment", ""))]
+        synthetic += [{"problem": "Virtual machine CPU saturated",
+                       "impactedResource": v.get("Name", "")} for v in saturated]
         if saturated:
-            score -= min(25, len(saturated) * 5)
             self.action_items.append({
                 "pillar": "Performance Efficiency",
                 "severity": "high",
@@ -420,8 +629,9 @@ class InsightEngine:
         # Saturated SQL
         sql_metrics = self.data.get("metrics", {}).get("SQL_RightSizing", [])
         saturated_sql = [s for s in sql_metrics if "Saturated" in str(s.get("Assessment", ""))]
+        synthetic += [{"problem": "SQL database DTU/CPU saturated",
+                       "impactedResource": s.get("Name", "")} for s in saturated_sql]
         if saturated_sql:
-            score -= min(20, len(saturated_sql) * 5)
             self.action_items.append({
                 "pillar": "Performance Efficiency",
                 "severity": "high",
@@ -433,7 +643,6 @@ class InsightEngine:
         # Performance advisor recommendations
         perf_recs = self.data.get("advisor", {}).get("Performance", [])
         if perf_recs:
-            score -= min(15, len(perf_recs) * 2)
             self.action_items.append({
                 "pillar": "Performance Efficiency",
                 "severity": "medium",
@@ -441,19 +650,21 @@ class InsightEngine:
                 "description": "Azure Advisor has identified performance improvements.",
                 "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in perf_recs[:10]]
             })
-        
-        self.scores["Performance Efficiency"] = max(0, score)
+
+        buckets = AdvisorScoreModel.merge_buckets(
+            AdvisorScoreModel.bucket(perf_recs, AdvisorScoreModel.PERFORMANCE_RULES),
+            AdvisorScoreModel.bucket(synthetic, AdvisorScoreModel.PERFORMANCE_RULES),
+        )
+        score, rows = AdvisorScoreModel.score_category(AdvisorScoreModel.PERFORMANCE_WEIGHTS, buckets, total_pool)
+        self.scores["Performance Efficiency"] = score if score is not None else 0
+        self.breakdowns["Performance Efficiency"] = {"available": score is not None, "rows": rows, "pool": total_pool}
     
     def get_overall_score(self) -> int:
-        """Weighted average of all pillar scores."""
-        weights = {
-            "Reliability": 0.25,
-            "Security": 0.25,
-            "Cost Optimization": 0.20,
-            "Operational Excellence": 0.15,
-            "Performance Efficiency": 0.15
-        }
-        return int(sum(self.scores[p] * weights[p] for p in self.scores))
+        """Mean of the available category scores (per the official Advisor Score model)."""
+        available = [p for p, b in self.breakdowns.items() if b.get("available")]
+        if not available:
+            return 0
+        return round(sum(self.scores[p] for p in available) / len(available))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -466,10 +677,68 @@ class DashboardGenerator:
     def __init__(self, engine: InsightEngine, data: dict):
         self.engine = engine
         self.data = data
+
+    def _render_score_breakdown(self) -> str:
+        """Render the 'why' behind each pillar score per the Advisor Score model."""
+        b = self.engine.breakdowns
+        sections = []
+
+        def subcategory_card(pillar):
+            info = b.get(pillar, {})
+            if not info.get("available"):
+                return f"""<div class="breakdown-card">
+                <h4>{pillar}</h4>
+                <p class="breakdown-note">Insufficient data — no discovered resource inventory (01_Discovery/ResourceSummary) to compute this pillar's score.</p>
+            </div>"""
+            rows_html = "".join(
+                f"<tr><td>{r['subcategory']}</td><td class='num'>{r['weight']}</td>"
+                f"<td class='num'>{r['healthy']}/{r['total']}</td><td class='num'>{r['pct']}%</td></tr>"
+                for r in info["rows"]
+            )
+            return f"""<div class="breakdown-card">
+                <h4>{pillar} <span class="breakdown-score">{self.engine.scores[pillar]}/100</span></h4>
+                <table>
+                    <thead><tr><th>Subcategory</th><th>Weight</th><th>Healthy/Total</th><th>Score</th></tr></thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+            </div>"""
+
+        sections.append(subcategory_card("Reliability"))
+        sections.append(subcategory_card("Performance Efficiency"))
+        sections.append(subcategory_card("Operational Excellence"))
+
+        security = b.get("Security", {})
+        if security.get("available"):
+            sections.append(f"""<div class="breakdown-card">
+                <h4>Security <span class="breakdown-score">{self.engine.scores['Security']}/100</span></h4>
+                <p class="breakdown-note">Microsoft Defender Secure Score average across {security.get('subscriptions_scored', 0)} subscription(s): <strong>{security.get('secure_score_pct')}%</strong>.</p>
+            </div>""")
+        else:
+            sections.append("""<div class="breakdown-card">
+                <h4>Security</h4>
+                <p class="breakdown-note">Insufficient data — no Defender Secure Score records found in 04_Governance/SecureScores.</p>
+            </div>""")
+
+        cost = b.get("Cost Optimization", {})
+        if cost.get("available"):
+            sources_html = "".join(f"<li>{name}: {count} resource(s)</li>" for name, count in cost.get("sources", [])) or "<li>No cost findings detected</li>"
+            sections.append(f"""<div class="breakdown-card">
+                <h4>Cost Optimization <span class="breakdown-score">{self.engine.scores['Cost Optimization']}/100</span></h4>
+                <p class="breakdown-note">Healthy {cost['healthy']}/{cost['total']} discovered resources (no active cost finding).</p>
+                <ul class="resource-list">{sources_html}</ul>
+            </div>""")
+        else:
+            sections.append("""<div class="breakdown-card">
+                <h4>Cost Optimization</h4>
+                <p class="breakdown-note">Insufficient data — no discovered resource inventory to compute this pillar's score.</p>
+            </div>""")
+
+        return "".join(sections)
     
     def generate(self) -> str:
         overall = self.engine.get_overall_score()
         scores = self.engine.scores
+        score_breakdown_html = self._render_score_breakdown()
         action_items = sorted(self.engine.action_items, 
                             key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(x["severity"], 5))
         
@@ -592,6 +861,24 @@ body {{
 .pillar-bar-fill {{ height: 100%; border-radius: 3px; transition: width 0.5s; }}
 .pillar-name {{ font-size: 12px; font-weight: 600; color: #555; }}
 
+/* Score Breakdown */
+.methodology-note {{
+    background: #eef6ff; border: 1px solid #cfe4fb; border-radius: 8px;
+    padding: 12px 16px; font-size: 12px; color: #333; margin-bottom: 16px;
+}}
+.methodology-note a {{ color: #0078D4; }}
+.breakdown-grid {{
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+}}
+.breakdown-card {{
+    background: white; border-radius: 10px; padding: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}}
+.breakdown-card h4 {{ font-size: 13px; margin-bottom: 10px; display: flex; justify-content: space-between; }}
+.breakdown-score {{ color: #0078D4; }}
+.breakdown-note {{ font-size: 12px; color: #666; }}
+
 /* Stats */
 .stats-row {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -681,6 +968,22 @@ tr:hover td {{ background: #f8fbff; }}
     <div class="stat-box"><div class="value">{total_resources:,}</div><div class="label">Total Resources</div></div>
     <div class="stat-box"><div class="value">{total_actions}</div><div class="label">Action Items</div></div>
     <div class="stat-box"><div class="value" style="color:#D13438;">{critical_actions}</div><div class="label">Critical/High Priority</div></div>
+</div>
+
+<!-- Score Methodology -->
+<div class="section">
+    <div class="section-title">📐 Score Methodology (Microsoft Advisor Score model)</div>
+    <div class="methodology-note">
+        Pillar scores follow the official <a href="https://learn.microsoft.com/en-us/azure/advisor/advisor-score#calculation-of-advisor-score" target="_blank">Azure Advisor Score</a>
+        formulas and subcategory weights instead of an arbitrary point system. Security uses the Microsoft Defender Secure Score directly.
+        Reliability, Performance, and Operational Excellence use Microsoft's published subcategory weights — recommendations are mapped to
+        subcategories via keyword matching (Azure Resource Graph doesn't expose Advisor's internal subcategory tag), and the discovered
+        resource inventory is used as the shared "total applicable resources" pool. Cost uses a resource-count healthy ratio instead of
+        retail-cost weighting, since this toolkit doesn't call the Azure Retail Prices API.
+    </div>
+    <div class="breakdown-grid">
+        {score_breakdown_html}
+    </div>
 </div>
 
 <!-- Action Items -->

@@ -14,7 +14,7 @@
     created alongside the scripts.
 
 .PARAMETER OutputDir
-    Base output directory. Defaults to ./AzureWorkshop_<timestamp> (same folder as scripts)
+    Base output directory. Defaults to a timestamped folder alongside the scripts.
 
 .PARAMETER SkipMetrics
     Skip the metrics script (it is slower, queries per-resource). Use if short on time.
@@ -40,6 +40,9 @@ if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 
 if (-not $OutputDir) {
     $OutputDir = Join-Path $scriptDir "AzureWorkshop_$timestamp"
+}
+if ($OutputDir -match '(?i)[\\/]OneDrive(?: - [^\\/]+)?[\\/]') {
+    Write-Warning "OneDrive may automatically encrypt generated workbooks while they are being written. If dashboard inputs come back unreadable, pause OneDrive sync for this folder during the run or re-run with -OutputDir pointing outside OneDrive."
 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -74,16 +77,36 @@ Import-Module Az.Monitor -ErrorAction SilentlyContinue
 Import-Module ImportExcel -ErrorAction Stop
 
 # Ensure Python + openpyxl for the dashboard agent
-$pythonCmd = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" }
-             elseif (Get-Command python -ErrorAction SilentlyContinue) { "python" }
-             else { $null }
+# `Get-Command` alone isn't enough: on Windows, `python`/`python3` can resolve to the
+# Microsoft Store app-execution-alias stub, which "exists" in PATH but exits 9009 without
+# running anything. Validate each candidate actually executes before trusting it.
+function Resolve-PythonCommand {
+    foreach ($candidate in @(
+        @{ Cmd = "py"; Args = @("-3") },
+        @{ Cmd = "python3"; Args = @() },
+        @{ Cmd = "python"; Args = @() }
+    )) {
+        if (-not (Get-Command $candidate.Cmd -ErrorAction SilentlyContinue)) { continue }
+        try {
+            $out = & $candidate.Cmd @($candidate.Args) --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and ($out -join ' ') -notmatch 'was not found') {
+                return $candidate
+            }
+        } catch { }
+    }
+    return $null
+}
+
+$python = Resolve-PythonCommand
+$pythonCmd = if ($python) { $python.Cmd } else { $null }
+$pythonArgs = if ($python) { $python.Args } else { @() }
 
 if ($pythonCmd) {
     Write-Host "  Checking Python openpyxl..." -ForegroundColor DarkGray
-    & $pythonCmd -c "import openpyxl" 2>$null
+    & $pythonCmd @pythonArgs -c "import openpyxl" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  Installing openpyxl..." -ForegroundColor DarkYellow
-        & $pythonCmd -m pip install openpyxl --quiet --user 2>$null
+        & $pythonCmd @pythonArgs -m pip install openpyxl --quiet --user 2>$null
     }
 } else {
     Write-Host "  Python not found - dashboard generation will be skipped" -ForegroundColor DarkYellow
@@ -105,33 +128,57 @@ Write-Host "Output:  $OutputDir`n" -ForegroundColor Cyan
 
 $startTime = Get-Date
 
+# Re-runs a phase script and validates its newest .xlsx isn't OneDrive-encrypted (OLE header),
+# retrying a few times since the encryption/decryption race is timing-dependent.
+function Invoke-PhaseWithValidation {
+    param(
+        [string]$Name,
+        [string]$ScriptPath,
+        [string]$OutputFolder,
+        [int]$MaxAttempts = 3
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            & $ScriptPath *>&1 | ForEach-Object { Write-Host $_ }
+        } catch {
+            Write-Host "  $Name error: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+
+        $xlsx = Get-ChildItem -Path $OutputFolder -Filter *.xlsx -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $xlsx) { return }
+
+        $header = [byte[]]::new(4)
+        $stream = [System.IO.File]::OpenRead($xlsx.FullName)
+        try { [void]$stream.Read($header, 0, 4) } finally { $stream.Close() }
+        $isValidZip = ($header[0] -eq 0x50 -and $header[1] -eq 0x4B)
+
+        if ($isValidZip) { return }
+
+        if ($attempt -lt $MaxAttempts) {
+            Write-Host "  ! $Name workbook looks OneDrive-encrypted (attempt $attempt/$MaxAttempts). Retrying..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds 5
+        } else {
+            Write-Host "  ! $Name workbook still invalid after $MaxAttempts attempts (OneDrive sync). Dashboard will treat this phase as unavailable." -ForegroundColor Yellow
+        }
+    }
+}
+
 # === PHASE 1: Resource Discovery ===
 Write-Host " PHASE 1/5: Resource Discovery" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/01_Discovery"
-try {
-    & "$scriptDir/Invoke-AzureDiscovery-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-} catch {
-    Write-Host "  Discovery error: $($_.Exception.Message)" -ForegroundColor Yellow
-}
+Invoke-PhaseWithValidation -Name "Discovery" -ScriptPath "$scriptDir/Invoke-AzureDiscovery-CloudShell.ps1" -OutputFolder "$OutputDir/01_Discovery"
 
 # === PHASE 2: Advisor Recommendations ===
 Write-Host "`n PHASE 2/5: Advisor Recommendations" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/02_Advisor"
-try {
-    & "$scriptDir/Invoke-AzureAdvisor-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-} catch {
-    Write-Host "  Advisor error: $($_.Exception.Message)" -ForegroundColor Yellow
-}
+Invoke-PhaseWithValidation -Name "Advisor" -ScriptPath "$scriptDir/Invoke-AzureAdvisor-CloudShell.ps1" -OutputFolder "$OutputDir/02_Advisor"
 
 # === PHASE 3: Metrics (Right-Sizing) ===
 if (-not $SkipMetrics) {
     Write-Host "`n PHASE 3/5: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
     $env:AZWORKSHOP_OUTPUT = "$OutputDir/03_Metrics"
-    try {
-        & "$scriptDir/Invoke-AzureMetrics-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-    } catch {
-        Write-Host "  Metrics error: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
+    Invoke-PhaseWithValidation -Name "Metrics" -ScriptPath "$scriptDir/Invoke-AzureMetrics-CloudShell.ps1" -OutputFolder "$OutputDir/03_Metrics"
 } else {
     Write-Host "`n PHASE 3/5: Metrics - SKIPPED" -ForegroundColor DarkYellow
 }
@@ -139,17 +186,16 @@ if (-not $SkipMetrics) {
 # === PHASE 4: Governance Visualization ===
 Write-Host "`n PHASE 4/5: Governance Visualization" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/04_Governance"
-try {
-    & "$scriptDir/Invoke-AzureGovernanceViz-CloudShell.ps1" *>&1 | ForEach-Object { Write-Host $_ }
-} catch {
-    Write-Host "  Governance error: $($_.Exception.Message)" -ForegroundColor Yellow
-}
+Invoke-PhaseWithValidation -Name "Governance" -ScriptPath "$scriptDir/Invoke-AzureGovernanceViz-CloudShell.ps1" -OutputFolder "$OutputDir/04_Governance"
 
 # === PHASE 5: Consolidated Dashboard ===
 Write-Host "`n PHASE 5/5: Generating Consolidated Dashboard" -ForegroundColor Cyan
 if ($pythonCmd) {
     try {
-        & $pythonCmd "$scriptDir/generate-dashboard.py" $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
+        & $pythonCmd @pythonArgs "$scriptDir/generate-dashboard.py" $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dashboard generator exited with code $LASTEXITCODE"
+        }
         Write-Host "  Dashboard generated in $OutputDir/05_Dashboard/" -ForegroundColor Green
     } catch {
         Write-Host "  Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
