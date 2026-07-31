@@ -8,7 +8,8 @@
       2. Invoke-AzureAdvisor-CloudShell.ps1         (Advisor recommendations)
       3. Invoke-AzureMetrics-CloudShell.ps1         (Right-sizing & reliability)
       4. Invoke-AzureGovernanceViz-CloudShell.ps1   (Governance + HTML report)
-      5. generate-dashboard.py                      (Consolidated dashboard + action items)
+    5. Invoke-AzureSecurity-CloudShell.ps1        (Defender posture + incidents)
+    6. generate-dashboard.py                      (Consolidated dashboard + action items)
     
     All outputs are consolidated into a single timestamped folder
     created alongside the scripts.
@@ -50,7 +51,8 @@ New-Item -ItemType Directory -Path "$OutputDir/01_Discovery" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/02_Advisor" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/03_Metrics" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/04_Governance" -Force | Out-Null
-New-Item -ItemType Directory -Path "$OutputDir/05_Dashboard" -Force | Out-Null
+New-Item -ItemType Directory -Path "$OutputDir/05_Security" -Force | Out-Null
+New-Item -ItemType Directory -Path "$OutputDir/06_Dashboard" -Force | Out-Null
 
 # --- Ensure modules ---
 Write-Host "Checking prerequisites..." -ForegroundColor Yellow
@@ -165,38 +167,43 @@ function Invoke-PhaseWithValidation {
 }
 
 # === PHASE 1: Resource Discovery ===
-Write-Host " PHASE 1/5: Resource Discovery" -ForegroundColor Cyan
+Write-Host " PHASE 1/6: Resource Discovery" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/01_Discovery"
 Invoke-PhaseWithValidation -Name "Discovery" -ScriptPath "$scriptDir/Invoke-AzureDiscovery-CloudShell.ps1" -OutputFolder "$OutputDir/01_Discovery"
 
 # === PHASE 2: Advisor Recommendations ===
-Write-Host "`n PHASE 2/5: Advisor Recommendations" -ForegroundColor Cyan
+Write-Host "`n PHASE 2/6: Advisor Recommendations" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/02_Advisor"
 Invoke-PhaseWithValidation -Name "Advisor" -ScriptPath "$scriptDir/Invoke-AzureAdvisor-CloudShell.ps1" -OutputFolder "$OutputDir/02_Advisor"
 
 # === PHASE 3: Metrics (Right-Sizing) ===
 if (-not $SkipMetrics) {
-    Write-Host "`n PHASE 3/5: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
+    Write-Host "`n PHASE 3/6: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
     $env:AZWORKSHOP_OUTPUT = "$OutputDir/03_Metrics"
     Invoke-PhaseWithValidation -Name "Metrics" -ScriptPath "$scriptDir/Invoke-AzureMetrics-CloudShell.ps1" -OutputFolder "$OutputDir/03_Metrics"
 } else {
-    Write-Host "`n PHASE 3/5: Metrics - SKIPPED" -ForegroundColor DarkYellow
+    Write-Host "`n PHASE 3/6: Metrics - SKIPPED" -ForegroundColor DarkYellow
 }
 
 # === PHASE 4: Governance Visualization ===
-Write-Host "`n PHASE 4/5: Governance Visualization" -ForegroundColor Cyan
+Write-Host "`n PHASE 4/6: Governance Visualization" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/04_Governance"
 Invoke-PhaseWithValidation -Name "Governance" -ScriptPath "$scriptDir/Invoke-AzureGovernanceViz-CloudShell.ps1" -OutputFolder "$OutputDir/04_Governance"
 
-# === PHASE 5: Consolidated Dashboard ===
-Write-Host "`n PHASE 5/5: Generating Consolidated Dashboard" -ForegroundColor Cyan
+# === PHASE 5: Security Assessment ===
+Write-Host "`n PHASE 5/6: Security Assessment" -ForegroundColor Cyan
+$env:AZWORKSHOP_OUTPUT = "$OutputDir/05_Security"
+Invoke-PhaseWithValidation -Name "Security" -ScriptPath "$scriptDir/Invoke-AzureSecurity-CloudShell.ps1" -OutputFolder "$OutputDir/05_Security"
+
+# === PHASE 6: Consolidated Dashboard ===
+Write-Host "`n PHASE 6/6: Generating Consolidated Dashboard" -ForegroundColor Cyan
 if ($pythonCmd) {
     try {
         & $pythonCmd @pythonArgs "$scriptDir/generate-dashboard.py" $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             throw "Dashboard generator exited with code $LASTEXITCODE"
         }
-        Write-Host "  Dashboard generated in $OutputDir/05_Dashboard/" -ForegroundColor Green
+        Write-Host "  Dashboard generated in $OutputDir/06_Dashboard/" -ForegroundColor Green
     } catch {
         Write-Host "  Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
@@ -216,4 +223,5 @@ Write-Host "  01_Discovery/    - Resource inventory (Excel)" -ForegroundColor Wh
 Write-Host "  02_Advisor/      - Advisor recommendations (Excel)" -ForegroundColor White
 Write-Host "  03_Metrics/      - Right-sizing analysis (Excel)" -ForegroundColor White
 Write-Host "  04_Governance/   - Governance report (HTML + Excel)" -ForegroundColor White
-Write-Host "  05_Dashboard/    - Consolidated dashboard (HTML)" -ForegroundColor White
+Write-Host "  05_Security/     - Security posture and operations (Excel)" -ForegroundColor White
+Write-Host "  06_Dashboard/    - Consolidated dashboard (HTML)" -ForegroundColor White

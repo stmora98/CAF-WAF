@@ -2,7 +2,7 @@
 
 A comprehensive suite of PowerShell scripts + Python dashboard agent for **Azure Well-Architected Framework (WAF)** and **Cloud Adoption Framework (CAF)** workshop preparation.
 
-**One launcher → four discovery phases → one consolidated dashboard.**
+**One launcher → five assessment phases → one consolidated dashboard.**
 
 ```
 Launch-AzureWorkshop.ps1 → generate-dashboard.py → WAF_Dashboard.html
@@ -31,8 +31,10 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 | Python 3.6+ | Pre-installed in Cloud Shell |
 | `openpyxl` | Auto-installed by the Python script |
 | `ImportExcel` PS module | Auto-installed by the launcher |
+| Microsoft Graph delegated access | Optional: `SecurityIncident.Read.All` and `SecurityAlert.Read.All` for Defender XDR incidents and alerts |
+| Defender for Endpoint access | Optional: Defender for Endpoint license and read permissions for machines, recommendations, and vulnerabilities |
 
-> **No Service Principal required.** Everything runs under your logged-in user context.
+> **No Service Principal required.** Everything runs under your logged-in user context. Defender for Cloud posture is the baseline; unavailable optional security sources are recorded in `SourceStatus` without aborting the assessment.
 
 ## Architecture
 
@@ -60,6 +62,15 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 │                     ▼                                       │
 │              04_Governance/                                  │
 │              AzureGovernance.html + .xlsx                    │
+│                                                             │
+│  Phase 5                                                    │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │ Security Assessment                              │       │
+│  │ → CSPM/MCSB + Defender XDR + Endpoint           │       │
+│  └──────────────────┬───────────────────────────────┘       │
+│                     ▼                                       │
+│              05_Security/                                    │
+│              AzureSecurity.xlsx                              │
 └─────────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -73,7 +84,7 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 │  • Produces consolidated HTML dashboard                     │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
-                    05_Dashboard/
+                    06_Dashboard/
                     WAF_Dashboard.html
 ```
 
@@ -86,6 +97,7 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 | `Invoke-AzureAdvisor-CloudShell.ps1` | Advisor recommendations by WAF pillar | ~30 sec |
 | `Invoke-AzureMetrics-CloudShell.ps1` | Right-sizing via Azure Monitor metrics | ~3-10 min |
 | `Invoke-AzureGovernanceViz-CloudShell.ps1` | Governance HTML (AzGovViz-style) | ~2 min |
+| `Invoke-AzureSecurity-CloudShell.ps1` | Defender for Cloud CSPM/MCSB, Defender XDR, and Endpoint export | ~1-3 min |
 | `generate-dashboard.py` | Consolidated dashboard with scoring + action items | ~5 sec |
 
 ## Output Structure
@@ -101,7 +113,9 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 ├── 04_Governance/
 │   ├── AzureGovernance.html         # Interactive governance report (AzGovViz-style)
 │   └── AzureGovernance.xlsx         # MG hierarchy, policies, RBAC, Defender
-└── 05_Dashboard/
+├── 05_Security/
+│   └── AzureSecurity.xlsx           # CSPM, MCSB, plans, incidents, alerts, Endpoint, source status
+└── 06_Dashboard/
     └── WAF_Dashboard.html           # ★ Final consolidated dashboard
 ```
 
@@ -114,13 +128,14 @@ The Python agent produces a **WAF_Dashboard.html** with:
 - **Prioritized Action Items** sorted by severity (Critical → Low)
 - **Resource Summary** tables
 - **Advisor Findings** aggregated view
+- **Dedicated Security tab** for CSPM recommendations, MCSB compliance, Defender plans, XDR incidents/alerts, Endpoint exposure, and source coverage
 
 ### Scoring Logic
 
 | Pillar | What's Evaluated |
 |---|---|
 | **Reliability** | Availability zones, backup vaults, DDoS, Advisor HA recs |
-| **Security** | Secure Score, public storage, Key Vault config, TLS, Advisor |
+| **Security** | Defender Secure Score, CSPM recommendations, MCSB, Defender plans, XDR incidents/alerts, public storage, Key Vault, and TLS |
 | **Cost Optimization** | Orphaned resources, deallocated VMs, right-sizing, Advisor |
 | **Operational Excellence** | Diagnostic settings, tag coverage, policy compliance |
 | **Performance Efficiency** | Saturated VMs/SQL, Advisor performance recs |
@@ -142,7 +157,20 @@ Each script can also be run standalone:
 ./Invoke-AzureAdvisor-CloudShell.ps1        # Runs independently
 ./Invoke-AzureMetrics-CloudShell.ps1        # Runs independently (slower)
 ./Invoke-AzureGovernanceViz-CloudShell.ps1  # Runs independently
+./Invoke-AzureSecurity-CloudShell.ps1       # Runs independently; requests optional Graph scopes
+./Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
+./Invoke-AzureSecurity-CloudShell.ps1 -SkipDefenderPortal  # Defender for Cloud posture only
 ```
+
+### Security Data Sources
+
+| Source | Data | Access behavior |
+|---|---|---|
+| Defender for Cloud via Azure Resource Graph | Secure Score, controls, recommendations, MCSB, regulatory standards, plans, cloud alerts | Uses existing Azure RBAC context |
+| Microsoft Graph Security | Defender XDR incidents and alerts | Prompts for delegated consent when scopes are missing |
+| Defender for Endpoint API | Machines, security recommendations, vulnerabilities | Requires a compatible license, API role, and token audience |
+
+Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` means the source was queried successfully and returned no records; `Forbidden`, `Unavailable`, `Partial`, or `Skipped` means the assessment does not have complete visibility for that source.
 
 ## Notes
 
@@ -151,3 +179,4 @@ Each script can also be run standalone:
 - The metrics script is the slowest (~1-3 min per 100 resources) as it queries per-resource.
 - Use `-SkipMetrics` if you're short on time during a workshop.
 - The Governance HTML can be used standalone as an AzGovViz-lite alternative.
+- Security API failures are isolated by source and do not prevent the workbook or dashboard from being generated.

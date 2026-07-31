@@ -20,6 +20,7 @@ import os
 import json
 import re
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Optional
 from zipfile import BadZipFile
@@ -44,18 +45,18 @@ except ImportError:
 
 class DashboardConfig:
     SEVERITY_COLORS = {
-        "critical": "#D13438",
-        "high": "#E74856",
-        "medium": "#FF8C00",
-        "low": "#0078D4",
-        "info": "#107C10"
+     "critical": "var(--cp-danger)",
+     "high": "var(--cp-danger)",
+     "medium": "var(--cp-warning)",
+     "low": "var(--cp-link)",
+     "info": "var(--cp-success)"
     }
     PILLAR_COLORS = {
-        "Reliability": "#0078D4",
-        "Security": "#D13438",
-        "Cost Optimization": "#107C10",
-        "Operational Excellence": "#5C2D91",
-        "Performance Efficiency": "#008272"
+     "Reliability": "var(--cp-link)",
+     "Security": "var(--cp-danger)",
+     "Cost Optimization": "var(--cp-success)",
+     "Operational Excellence": "var(--cp-accent)",
+     "Performance Efficiency": "var(--cp-warning)"
     }
 
 
@@ -170,7 +171,8 @@ class ExcelReader:
             "discovery": {},
             "advisor": {},
             "metrics": {},
-            "governance": {}
+            "governance": {},
+            "security": {}
         }
         
         # Discovery
@@ -196,6 +198,12 @@ class ExcelReader:
         if path:
             data["governance"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Governance: {sum(len(v) for v in data['governance'].values())} records across {len(data['governance'])} sheets")
+
+        # Security
+        path = ExcelReader.find_workbook(base_dir, "05_Security", "AzureSecurity")
+        if path:
+            data["security"] = ExcelReader.read_workbook(path)
+            print(f"  ✓ Security: {sum(len(v) for v in data['security'].values())} records across {len(data['security'])} sheets")
         
         return data
 
@@ -371,6 +379,7 @@ class InsightEngine:
         return [
             row for row in rows
             if str(row.get("Result", row.get("result", ""))).strip().lower() not in empty_results
+            and str(row.get("DataStatus", "")).strip().lower() != "nodata"
         ]
     
     def analyze(self):
@@ -459,10 +468,16 @@ class InsightEngine:
     
     def _analyze_security(self):
         """Security score = Microsoft Defender Secure Score average (same model Advisor uses)."""
-        secure_scores = self.data.get("governance", {}).get("SecureScores", [])
+        security = self.data.get("security", {})
+        secure_scores = self._data_rows(security.get("SecureScores", []))
+        if not secure_scores:
+            secure_scores = self._data_rows(self.data.get("governance", {}).get("SecureScores", []))
         avg_score = None
         if secure_scores:
-            values = [float(s.get("pct", s.get("percentage", 0)) or 0) for s in secure_scores]
+            values = [
+                float(s.get("percentageScore", s.get("pct", s.get("percentage", 0))) or 0)
+                for s in secure_scores
+            ]
             avg_score = sum(values) / len(values)
             if avg_score <= 1:  # export may store a 0-1 ratio instead of 0-100
                 avg_score *= 100
@@ -513,7 +528,7 @@ class InsightEngine:
             })
         
         # Security advisor recommendations (informational — already reflected in Secure Score)
-        sec_recs = self.data.get("advisor", {}).get("Security", [])
+        sec_recs = self._data_rows(self.data.get("advisor", {}).get("Security", []))
         if sec_recs:
             self.action_items.append({
                 "pillar": "Security",
@@ -546,8 +561,13 @@ class InsightEngine:
             })
         
         # Microsoft Defender for Cloud plans not enabled (informational)
-        defender_plans = self.data.get("governance", {}).get("DefenderPlans", [])
-        disabled_plans = [p for p in defender_plans if str(p.get("tier", "")).lower() == "free"]
+        defender_plans = self._data_rows(security.get("DefenderPlans", []))
+        if not defender_plans:
+            defender_plans = self._data_rows(self.data.get("governance", {}).get("DefenderPlans", []))
+        disabled_plans = [
+            p for p in defender_plans
+            if str(p.get("pricingTier", p.get("tier", ""))).lower() == "free"
+        ]
         if disabled_plans:
             self.action_items.append({
                 "pillar": "Security",
@@ -556,8 +576,72 @@ class InsightEngine:
                 "title_es": f"{len(disabled_plans)} Planes de Microsoft Defender for Cloud no habilitados (nivel gratuito)",
                 "description": "Enable Microsoft Defender for Cloud plans for full threat protection coverage.",
                 "description_es": "Habilite los planes de Microsoft Defender for Cloud para una cobertura completa de protección contra amenazas.",
-                "resources": sorted({p.get("name", "") for p in disabled_plans})[:10]
+                "resources": sorted({p.get("planName", p.get("name", "")) for p in disabled_plans})[:10]
             })
+
+        posture_recommendations = self._data_rows(security.get("Recommendations", []))
+        open_recommendations = [
+            recommendation for recommendation in posture_recommendations
+            if str(recommendation.get("recommendationState", "")).lower() not in ("healthy", "notapplicable")
+        ]
+        severe_recommendations = [
+            recommendation for recommendation in open_recommendations
+            if str(recommendation.get("recommendationSeverity", "")).lower() in ("critical", "high")
+        ]
+        if severe_recommendations:
+            self.action_items.append({
+                "pillar": "Security",
+                "severity": "high",
+                "title": f"{len(severe_recommendations)} high-severity Defender for Cloud recommendations",
+                "title_es": f"{len(severe_recommendations)} recomendaciones de alta severidad de Defender for Cloud",
+                "description": "Prioritize unhealthy CSPM recommendations that carry critical or high severity.",
+                "description_es": "Priorice las recomendaciones de CSPM no saludables con severidad crítica o alta.",
+                "resources": [
+                    recommendation.get("recommendationName", recommendation.get("affectedResourceId", ""))
+                    for recommendation in severe_recommendations[:10]
+                ]
+            })
+
+        score_controls = self._data_rows(security.get("ScoreControls", []))
+        unhealthy_control_resources = sum(
+            int(control.get("unhealthyResourceCount", 0) or 0) for control in score_controls
+        )
+        mcsb_assessments = self._data_rows(security.get("MCSBCompliance", []))
+        mcsb_failed_resources = sum(
+            int(assessment.get("failedResources", 0) or 0) for assessment in mcsb_assessments
+        )
+
+        incidents = self._data_rows(security.get("Incidents", []))
+        active_incidents = [
+            incident for incident in incidents
+            if str(incident.get("Status", "")).lower() not in ("resolved", "redirected")
+        ]
+        severe_incidents = [
+            incident for incident in active_incidents
+            if str(incident.get("Severity", "")).lower() in ("critical", "high")
+        ]
+        if severe_incidents:
+            self.action_items.append({
+                "pillar": "Security",
+                "severity": "critical",
+                "title": f"{len(severe_incidents)} active high-severity security incidents",
+                "title_es": f"{len(severe_incidents)} incidentes de seguridad activos de alta severidad",
+                "description": "Investigate active Microsoft Defender XDR incidents and confirm ownership and containment.",
+                "description_es": "Investigue los incidentes activos de Microsoft Defender XDR y confirme su asignación y contención.",
+                "resources": [incident.get("DisplayName", incident.get("IncidentId", "")) for incident in severe_incidents[:10]]
+            })
+
+        graph_alerts = self._data_rows(security.get("Alerts", []))
+        cloud_alerts = self._data_rows(security.get("CloudAlerts", []))
+        active_alerts = [
+            alert for alert in graph_alerts
+            if str(alert.get("Status", "")).lower() not in ("resolved", "dismissed")
+        ]
+        active_cloud_alerts = [
+            alert for alert in cloud_alerts
+            if str(alert.get("status", "")).lower() not in ("resolved", "dismissed")
+        ]
+        source_status = self._data_rows(security.get("SourceStatus", []))
         
         self.scores["Security"] = round(avg_score) if avg_score is not None else 0
         self.breakdowns["Security"] = {
@@ -570,8 +654,24 @@ class InsightEngine:
                 ("Storage Accounts below TLS 1.2", "Cuentas de almacenamiento por debajo de TLS 1.2", len(old_tls)),
                 ("Broad-scope Owner/Contributor Assignments", "Asignaciones Owner/Contributor de alcance amplio", len(broad_privileged)),
                 ("Defender for Cloud Plans on Free Tier", "Planes de Defender for Cloud en nivel gratuito", len(disabled_plans)),
+                ("Open Defender for Cloud Recommendations", "Recomendaciones abiertas de Defender for Cloud", len(open_recommendations)),
+                ("Unhealthy Secure Score Control Resources", "Recursos no saludables en controles de Secure Score", unhealthy_control_resources),
+                ("Failed MCSB Resources", "Recursos con error en MCSB", mcsb_failed_resources),
+                ("Active Defender XDR Incidents", "Incidentes activos de Defender XDR", len(active_incidents)),
+                ("Active Security Alerts", "Alertas de seguridad activas", len(active_alerts) + len(active_cloud_alerts)),
                 ("Advisor Security Recommendations", "Recomendaciones de seguridad de Advisor", len(sec_recs)),
             ],
+            "open_recommendations": len(open_recommendations),
+            "severe_recommendations": len(severe_recommendations),
+            "unhealthy_control_resources": unhealthy_control_resources,
+            "mcsb_assessments": len(mcsb_assessments),
+            "mcsb_failed_resources": mcsb_failed_resources,
+            "defender_plans": len(defender_plans),
+            "disabled_plans": len(disabled_plans),
+            "active_incidents": len(active_incidents),
+            "severe_incidents": len(severe_incidents),
+            "active_alerts": len(active_alerts) + len(active_cloud_alerts),
+            "source_status": source_status,
         }
     
     def _analyze_cost(self):
@@ -874,9 +974,200 @@ class DashboardGenerator:
     @staticmethod
     def _count_real(rows: list) -> int:
         """Count sheet rows, ignoring the Export-Sheet 'No data found' placeholder row."""
-        if not rows or (len(rows) == 1 and rows[0].get("Result")):
-            return 0
-        return len(rows)
+        return len([
+            row for row in rows
+            if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+        ])
+
+    def _render_security_view(self) -> str:
+        """Render dedicated security posture, compliance, and operations details."""
+        security = self.data.get("security", {})
+        breakdown = self.engine.breakdowns.get("Security", {})
+
+        def real_rows(sheet_name):
+            return [
+                row for row in security.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def as_int(value):
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def render_table(rows, columns, empty_en, empty_es, limit=12):
+            if not rows:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+            body = ""
+            for row in rows[:limit]:
+                cells = "".join(
+                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    for key, _, _, numeric in columns
+                )
+                body += f"<tr>{cells}</tr>"
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>'
+
+        severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+        recommendations = [
+            row for row in real_rows("Recommendations")
+            if str(row.get("recommendationState", "")).lower() not in ("healthy", "notapplicable")
+        ]
+        recommendations.sort(key=lambda row: severity_rank.get(str(row.get("recommendationSeverity", "")).lower(), 5))
+        controls = sorted(
+            real_rows("ScoreControls"),
+            key=lambda row: as_int(row.get("unhealthyResourceCount")),
+            reverse=True,
+        )
+        mcsb = sorted(
+            real_rows("MCSBCompliance"),
+            key=lambda row: as_int(row.get("failedResources")),
+            reverse=True,
+        )
+        defender_plans = real_rows("DefenderPlans")
+        source_status = real_rows("SourceStatus")
+        incidents = sorted(real_rows("Incidents"), key=lambda row: str(row.get("LastUpdateDateTime", "")), reverse=True)
+        alerts = sorted(real_rows("Alerts"), key=lambda row: str(row.get("LastUpdateDateTime", "")), reverse=True)
+        endpoint_recommendations = sorted(
+            real_rows("EndpointRecommendations"),
+            key=lambda row: as_int(row.get("ExposedMachinesCount")),
+            reverse=True,
+        )
+        vulnerabilities = sorted(
+            real_rows("Vulnerabilities"),
+            key=lambda row: severity_rank.get(str(row.get("Severity", "")).lower(), 5),
+        )
+        machines = real_rows("Machines")
+        at_risk_machines = len([
+            machine for machine in machines
+            if str(machine.get("RiskScore", "")).lower() in ("critical", "high")
+        ])
+
+        secure_score = breakdown.get("secure_score_pct")
+        secure_score_text = f"{secure_score:.1f}%" if secure_score is not None else "N/A"
+        stats = [
+            (secure_score_text, bi("Defender Secure Score", "Secure Score de Defender"), "security-accent"),
+            (breakdown.get("open_recommendations", 0), bi("Open CSPM Recommendations", "Recomendaciones CSPM abiertas"), "security-danger"),
+            (breakdown.get("mcsb_failed_resources", 0), bi("Failed MCSB Resources", "Recursos con error en MCSB"), "security-warning"),
+            (breakdown.get("active_incidents", 0), bi("Active XDR Incidents", "Incidentes XDR activos"), "security-danger"),
+            (breakdown.get("active_alerts", 0), bi("Active Security Alerts", "Alertas de seguridad activas"), "security-warning"),
+            (at_risk_machines, bi("High-risk Endpoints", "Endpoints de alto riesgo"), "security-danger"),
+        ]
+        stat_html = "".join(
+            f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
+            for value, label, color_class in stats
+        )
+
+        status_rows = ""
+        for row in source_status:
+            status = str(row.get("Status", "Unknown"))
+            status_class = re.sub(r"[^a-z]", "", status.lower())
+            status_rows += f"""<tr>
+                <td>{escape(str(row.get('Source', '')))}</td>
+                <td><span class="source-status source-{status_class}">{escape(status)}</span></td>
+                <td class="num">{escape(str(row.get('Records', 0)))}</td>
+                <td>{escape(str(row.get('Details', '')))}</td>
+            </tr>"""
+        if source_status:
+            source_table = f"""<div class="security-table-wrap"><table>
+                <thead><tr><th>{bi('Source', 'Fuente')}</th><th>{bi('Status', 'Estado')}</th><th>{bi('Records', 'Registros')}</th><th>{bi('Details', 'Detalles')}</th></tr></thead>
+                <tbody>{status_rows}</tbody>
+            </table></div>"""
+        else:
+            source_table = f'<p class="empty-state">{bi("Security source status is unavailable.", "El estado de las fuentes de seguridad no está disponible.")}</p>'
+
+        recommendations_table = render_table(recommendations, [
+            ("recommendationSeverity", "Severity", "Severidad", False),
+            ("recommendationName", "Recommendation", "Recomendación", False),
+            ("recommendationState", "State", "Estado", False),
+            ("affectedResourceId", "Affected Resource", "Recurso afectado", False),
+        ], "No open Defender for Cloud recommendations.", "No hay recomendaciones abiertas de Defender for Cloud.")
+        controls_table = render_table(controls, [
+            ("controlName", "Secure Score Control", "Control de Secure Score", False),
+            ("healthyResourceCount", "Healthy", "Saludables", True),
+            ("unhealthyResourceCount", "Unhealthy", "No saludables", True),
+            ("currentScore", "Current Score", "Puntaje actual", True),
+            ("maxScore", "Max Score", "Puntaje máximo", True),
+        ], "No Secure Score controls returned.", "No se devolvieron controles de Secure Score.")
+        mcsb_table = render_table(mcsb, [
+            ("complianceControl", "MCSB Control", "Control MCSB", False),
+            ("assessmentName", "Assessment", "Evaluación", False),
+            ("state", "State", "Estado", False),
+            ("passedResources", "Passed", "Aprobados", True),
+            ("failedResources", "Failed", "Con error", True),
+        ], "No MCSB assessment data returned.", "No se devolvieron datos de evaluación MCSB.")
+        plans_table = render_table(defender_plans, [
+            ("planName", "Defender Plan", "Plan de Defender", False),
+            ("pricingTier", "Tier", "Nivel", False),
+            ("subPlan", "Sub-plan", "Subplan", False),
+            ("subscriptionId", "Subscription", "Suscripción", False),
+        ], "No Defender plan data returned.", "No se devolvieron datos de planes de Defender.")
+        incidents_table = render_table(incidents, [
+            ("Severity", "Severity", "Severidad", False),
+            ("DisplayName", "Incident", "Incidente", False),
+            ("Status", "Status", "Estado", False),
+            ("AssignedTo", "Assigned To", "Asignado a", False),
+            ("LastUpdateDateTime", "Last Updated", "Última actualización", False),
+        ], "No incidents returned for the selected lookback period.", "No se devolvieron incidentes para el período seleccionado.")
+        alerts_table = render_table(alerts, [
+            ("Severity", "Severity", "Severidad", False),
+            ("Title", "Alert", "Alerta", False),
+            ("Status", "Status", "Estado", False),
+            ("ServiceSource", "Service", "Servicio", False),
+            ("LastUpdateDateTime", "Last Updated", "Última actualización", False),
+        ], "No alerts returned for the selected lookback period.", "No se devolvieron alertas para el período seleccionado.")
+        endpoint_recommendations_table = render_table(endpoint_recommendations, [
+            ("RecommendationName", "Endpoint Recommendation", "Recomendación de Endpoint", False),
+            ("ExposedMachinesCount", "Exposed Machines", "Equipos expuestos", True),
+            ("SeverityScore", "Severity Score", "Puntaje de severidad", True),
+            ("Status", "Status", "Estado", False),
+        ], "No Defender for Endpoint recommendations returned.", "No se devolvieron recomendaciones de Defender for Endpoint.")
+        vulnerabilities_table = render_table(vulnerabilities, [
+            ("VulnerabilityId", "CVE", "CVE", False),
+            ("Severity", "Severity", "Severidad", False),
+            ("CvssV3", "CVSS v3", "CVSS v3", True),
+            ("ExposedMachines", "Exposed Machines", "Equipos expuestos", True),
+            ("PublicExploit", "Public Exploit", "Exploit público", False),
+        ], "No Defender for Endpoint vulnerabilities returned.", "No se devolvieron vulnerabilidades de Defender for Endpoint.")
+
+        return f"""
+        <div class="security-summary-band">
+            <div>
+                <div class="security-eyebrow">MICROSOFT DEFENDER</div>
+                <h2>{bi('Security posture and operations', 'Postura y operaciones de seguridad')}</h2>
+                <p>{bi('CSPM, Microsoft Cloud Security Benchmark, Defender XDR, and endpoint exposure in one assessment.', 'CSPM, Microsoft Cloud Security Benchmark, Defender XDR y exposición de endpoints en una sola evaluación.')}</p>
+            </div>
+            <div class="security-score-mark">{secure_score_text}</div>
+        </div>
+        <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM')}</div>
+            {recommendations_table}
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Secure Score controls', 'Controles de Secure Score')}</h3>{controls_table}</div>
+            <div class="security-panel"><h3>{bi('Microsoft Cloud Security Benchmark', 'Microsoft Cloud Security Benchmark')}</h3>{mcsb_table}</div>
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Defender for Cloud coverage', 'Cobertura de Defender for Cloud')}</h3>{plans_table}</div>
+            <div class="security-panel"><h3>{bi('Data source coverage', 'Cobertura de fuentes de datos')}</h3>{source_table}</div>
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Defender XDR operations', 'Operaciones de Defender XDR')}</div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Recent incidents', 'Incidentes recientes')}</h3>{incidents_table}</div>
+                <div class="security-panel"><h3>{bi('Recent alerts', 'Alertas recientes')}</h3>{alerts_table}</div>
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Defender for Endpoint exposure', 'Exposición de Defender for Endpoint')}</div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad')}</h3>{endpoint_recommendations_table}</div>
+                <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
+            </div>
+        </div>"""
 
     def _render_governance_overview(self) -> str:
         """Surface GovViz data (RBAC, policy, locks, management groups) that isn't reflected in pillar scores."""
@@ -1035,6 +1326,7 @@ class DashboardGenerator:
         scores = self.engine.scores
         score_breakdown_html = self._render_score_breakdown()
         governance_overview_html = self._render_governance_overview()
+        security_view_html = self._render_security_view()
         action_items = sorted(self.engine.action_items, 
                             key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(x["severity"], 5))
         
@@ -1047,7 +1339,7 @@ class DashboardGenerator:
         # Build action items HTML
         actions_html = ""
         for i, action in enumerate(action_items, 1):
-            color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "#666")
+            color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "var(--cp-text-muted)")
             resources_html = ""
             if action.get("resources"):
                 resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
@@ -1102,30 +1394,141 @@ class DashboardGenerator:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Azure WAF/CAF Workshop - Consolidated Dashboard</title>
+<script>
+    (() => {{
+        const param = new URLSearchParams(window.location.search).get("scoutTheme");
+        const theme =
+            param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+    }})();
+</script>
 <style>
+:root {{
+    color-scheme: light;
+    --cp-bg: #f7f4ef;
+    --cp-bg-elevated: #fcfbf8;
+    --cp-surface: #ffffff;
+    --cp-surface-soft: #f5f5f5;
+    --cp-border: #dedede;
+    --cp-border-strong: #919191;
+    --cp-text: #242424;
+    --cp-text-muted: #5c5c5c;
+    --cp-text-soft: #6f6f6f;
+    --cp-accent: #b11f4b;
+    --cp-accent-hover: #9a1a41;
+    --cp-accent-soft: rgba(177, 31, 75, 0.08);
+    --cp-accent-fg: #ffffff;
+    --cp-success: #16a34a;
+    --cp-danger: #dc2626;
+    --cp-warning: #f59e0b;
+    --cp-link: #0078d4;
+    --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+    --cp-overlay: rgba(255, 255, 255, 0.8);
+    --cp-panel: rgba(255, 255, 255, 0.86);
+    --cp-panel-strong: rgba(255, 255, 255, 0.96);
+    --cp-sheen: rgba(255, 255, 255, 0.55);
+    --cp-highlight: rgba(177, 31, 75, 0.12);
+}}
+html[data-theme="dark"] {{
+    color-scheme: dark;
+    --cp-bg: #3d3b3a;
+    --cp-bg-elevated: #343231;
+    --cp-surface: #292929;
+    --cp-surface-soft: #2e2e2e;
+    --cp-border: #474747;
+    --cp-border-strong: #5f5f5f;
+    --cp-text: #dedede;
+    --cp-text-muted: #919191;
+    --cp-text-soft: #b0b0b0;
+    --cp-accent: #fd8ea1;
+    --cp-accent-hover: #fb7b91;
+    --cp-accent-soft: rgba(253, 142, 161, 0.14);
+    --cp-accent-fg: #1a1a1a;
+    --cp-success: #4ade80;
+    --cp-danger: #f87171;
+    --cp-warning: #fbbf24;
+    --cp-link: #4da6ff;
+    --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+    --cp-overlay: rgba(41, 41, 41, 0.88);
+    --cp-panel: rgba(41, 41, 41, 0.72);
+    --cp-panel-strong: rgba(41, 41, 41, 0.96);
+    --cp-sheen: rgba(255, 255, 255, 0.04);
+    --cp-highlight: rgba(253, 142, 161, 0.12);
+}}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
-    font-family: "Segoe UI", -apple-system, sans-serif;
-    background: #f5f5f5; color: #333;
+        font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+        background: var(--cp-bg); color: var(--cp-text);
     line-height: 1.5;
 }}
 .dashboard {{ max-width: 1400px; margin: 0 auto; padding: 24px; }}
 
 /* Header */
 .header {{
-    background: linear-gradient(135deg, #0078D4, #005A9E);
-    color: white; padding: 32px; border-radius: 12px;
+    background: var(--cp-accent);
+    color: var(--cp-accent-fg); padding: 32px; border-radius: 10px;
     margin-bottom: 24px; position: relative;
 }}
 .header h1 {{ font-size: 28px; margin-bottom: 8px; }}
 .header .subtitle {{ opacity: 0.85; font-size: 14px; }}
 
+/* Dashboard views */
+.view-tabs {{
+    display: flex; width: fit-content; gap: 4px; padding: 4px;
+    margin-bottom: 24px; background: var(--cp-surface-soft); border: 1px solid var(--cp-border); border-radius: 8px;
+}}
+.view-tab {{
+    border: 0; background: transparent; color: var(--cp-text-muted); cursor: pointer;
+    padding: 8px 18px; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 600;
+}}
+.view-tab[aria-selected="true"] {{ background: var(--cp-surface); color: var(--cp-accent); }}
+.dashboard-view[hidden] {{ display: none; }}
+
+/* Dedicated security view */
+.security-summary-band {{
+    display: flex; justify-content: space-between; align-items: center; gap: 24px;
+    background: var(--cp-bg-elevated); color: var(--cp-text); padding: 28px 32px; border-left: 6px solid var(--cp-accent);
+    margin-bottom: 18px;
+}}
+.security-summary-band h2 {{ font-size: 24px; margin: 2px 0 6px; }}
+.security-summary-band p {{ color: var(--cp-text-muted); font-size: 13px; }}
+.security-eyebrow {{ color: var(--cp-warning); font-size: 10px; font-weight: 700; letter-spacing: 1px; }}
+.security-score-mark {{ font-size: 44px; font-weight: 700; color: var(--cp-accent); white-space: nowrap; }}
+.security-stats {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }}
+.security-stat {{ background: var(--cp-surface); border-top: 3px solid var(--cp-border-strong); padding: 16px; min-width: 0; }}
+.security-stat .value {{ font-size: 27px; font-weight: 700; }}
+.security-stat .label {{ color: var(--cp-text-muted); font-size: 11px; margin-top: 4px; }}
+.security-accent {{ color: var(--cp-link); }}
+.security-danger {{ color: var(--cp-danger); }}
+.security-warning {{ color: var(--cp-warning); }}
+.security-title {{ border-bottom-color: var(--cp-accent); }}
+.security-two-column {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-bottom: 24px; }}
+.security-panel {{ background: var(--cp-surface); padding: 18px; min-width: 0; border-top: 3px solid var(--cp-border-strong); }}
+.security-panel h3 {{ font-size: 14px; margin-bottom: 12px; }}
+.security-table-wrap {{ width: 100%; overflow-x: auto; }}
+.security-table-wrap table {{ min-width: 540px; }}
+.empty-state {{ color: var(--cp-text-muted); font-size: 12px; padding: 16px 0; }}
+.source-status {{ display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; }}
+.source-available, .source-nodata {{ background: var(--cp-highlight); color: var(--cp-success); }}
+.source-partial {{ background: var(--cp-accent-soft); color: var(--cp-warning); }}
+.source-forbidden, .source-unavailable, .source-error {{ background: var(--cp-accent-soft); color: var(--cp-danger); }}
+.source-skipped {{ background: var(--cp-surface-soft); color: var(--cp-text-muted); }}
+@media (max-width: 1050px) {{ .security-stats {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
+@media (max-width: 760px) {{
+    .view-tabs {{ width: 100%; }}
+    .view-tab {{ flex: 1; }}
+    .security-summary-band {{ align-items: flex-start; padding: 22px 18px; }}
+    .security-score-mark {{ font-size: 30px; }}
+    .security-stats {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .security-two-column {{ grid-template-columns: minmax(0, 1fr); }}
+}}
+
 /* Overall Score */
 .score-section {{
     display: grid; grid-template-columns: 200px 1fr;
     gap: 24px; margin-bottom: 24px;
-    background: white; border-radius: 12px; padding: 24px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    background: var(--cp-surface); border-radius: 10px; padding: 24px;
+    box-shadow: var(--cp-shadow);
 }}
 .overall-score {{
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1135,36 +1538,36 @@ body {{
     display: flex; align-items: center; justify-content: center;
     font-size: 48px; font-weight: 700;
     background: conic-gradient(
-        {'#107C10' if overall >= 80 else '#FF8C00' if overall >= 50 else '#D13438'} {overall * 3.6}deg,
-        #e0e0e0 {overall * 3.6}deg
+        {'var(--cp-success)' if overall >= 80 else 'var(--cp-warning)' if overall >= 50 else 'var(--cp-danger)'} {overall * 3.6}deg,
+        var(--cp-border) {overall * 3.6}deg
     );
     position: relative;
 }}
 .score-circle::after {{
     content: '{overall}'; position: absolute;
     width: 110px; height: 110px; border-radius: 50%;
-    background: white; display: flex; align-items: center; justify-content: center;
+    background: var(--cp-surface); display: flex; align-items: center; justify-content: center;
     font-size: 42px; font-weight: 700;
-    color: {'#107C10' if overall >= 80 else '#FF8C00' if overall >= 50 else '#D13438'};
+    color: {'var(--cp-success)' if overall >= 80 else 'var(--cp-warning)' if overall >= 50 else 'var(--cp-danger)'};
 }}
-.score-label {{ margin-top: 8px; font-size: 14px; color: #666; font-weight: 600; }}
+.score-label {{ margin-top: 8px; font-size: 14px; color: var(--cp-text-muted); font-weight: 600; }}
 
 .pillars-grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;
 }}
 .pillar-card {{
-    background: #f9f9f9; border-radius: 8px; padding: 16px;
-    border: 1px solid #eee;
+    background: var(--cp-surface-soft); border-radius: 8px; padding: 16px;
+    border: 1px solid var(--cp-border);
 }}
 .pillar-score {{ font-size: 32px; font-weight: 700; }}
-.pillar-bar {{ height: 6px; background: #e0e0e0; border-radius: 3px; margin: 8px 0; }}
+.pillar-bar {{ height: 6px; background: var(--cp-border); border-radius: 3px; margin: 8px 0; }}
 .pillar-bar-fill {{ height: 100%; border-radius: 3px; transition: width 0.5s; }}
-.pillar-name {{ font-size: 12px; font-weight: 600; color: #555; }}
+.pillar-name {{ font-size: 12px; font-weight: 600; color: var(--cp-text-muted); }}
 
 @media (max-width: 700px) {{
     .dashboard {{ padding: 12px; }}
-    .header {{ padding: 24px 16px; }}
-    .header h1 {{ padding-right: 60px; }}
+    .header {{ padding: 64px 16px 24px; }}
+    .header h1 {{ padding-right: 0; }}
     .lang-toggle {{ top: 16px; right: 16px; }}
     .score-section {{ grid-template-columns: minmax(0, 1fr); padding: 16px; }}
     .pillars-grid {{ grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); min-width: 0; }}
@@ -1173,22 +1576,22 @@ body {{
 
 /* Score Breakdown */
 .methodology-note {{
-    background: #eef6ff; border: 1px solid #cfe4fb; border-radius: 8px;
-    padding: 12px 16px; font-size: 12px; color: #333; margin-bottom: 16px;
+    background: var(--cp-accent-soft); border: 1px solid var(--cp-border); border-radius: 8px;
+    padding: 12px 16px; font-size: 12px; color: var(--cp-text); margin-bottom: 16px;
 }}
-.methodology-note a {{ color: #0078D4; }}
+.methodology-note a {{ color: var(--cp-link); }}
 .breakdown-grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 16px;
 }}
 @media (min-width: 701px) {{ .breakdown-grid {{ grid-auto-rows: 1fr; }} }}
 .breakdown-card {{
-    background: white; border-radius: 10px; padding: 16px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08); min-width: 0;
+    background: var(--cp-surface); border-radius: 10px; padding: 16px;
+    box-shadow: var(--cp-shadow); min-width: 0;
 }}
 .breakdown-card h4 {{ font-size: 13px; margin-bottom: 10px; display: flex; justify-content: space-between; }}
-.breakdown-score {{ color: #0078D4; }}
-.breakdown-note {{ font-size: 12px; color: #666; }}
+.breakdown-score {{ color: var(--cp-link); }}
+.breakdown-note {{ font-size: 12px; color: var(--cp-text-muted); }}
 .breakdown-table-wrap {{ width: 100%; overflow-x: auto; }}
 .cost-breakdown-card table {{ table-layout: fixed; }}
 .cost-breakdown-card th,
@@ -1199,14 +1602,14 @@ body {{
 /* Governance Visualizer embed */
 .governance-embed {{ margin-top: 16px; }}
 .governance-embed-toolbar {{
-    background: white; border-radius: 8px 8px 0 0; padding: 10px 16px;
-    border: 1px solid #ddd; border-bottom: none; font-size: 12px;
+    background: var(--cp-surface); border-radius: 8px 8px 0 0; padding: 10px 16px;
+    border: 1px solid var(--cp-border); border-bottom: none; font-size: 12px;
 }}
-.governance-embed-toolbar a {{ color: #0078D4; text-decoration: none; font-weight: 600; }}
+.governance-embed-toolbar a {{ color: var(--cp-link); text-decoration: none; font-weight: 600; }}
 /* Fallback height covers most reports; onload JS below grows it to the real content height when the browser allows cross-frame access. */
 .governance-embed iframe {{
-    width: 100%; height: 1400px; border: 1px solid #ddd; border-radius: 0 0 8px 8px;
-    background: white;
+    width: 100%; height: 1400px; border: 1px solid var(--cp-border); border-radius: 0 0 8px 8px;
+    background: var(--cp-surface);
 }}
 
 /* Stats */
@@ -1215,37 +1618,37 @@ body {{
     gap: 16px; margin-bottom: 24px;
 }}
 .stat-box {{
-    background: white; border-radius: 10px; padding: 20px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center;
+    background: var(--cp-surface); border-radius: 10px; padding: 20px;
+    box-shadow: var(--cp-shadow); text-align: center;
 }}
-.stat-box .value {{ font-size: 36px; font-weight: 700; color: #0078D4; }}
-.stat-box .label {{ font-size: 12px; color: #666; margin-top: 4px; }}
+.stat-box .value {{ font-size: 36px; font-weight: 700; color: var(--cp-link); }}
+.stat-box .label {{ font-size: 12px; color: var(--cp-text-muted); margin-top: 4px; }}
 
 /* Action Items */
 .section {{ margin-bottom: 24px; }}
 .section-title {{
     font-size: 18px; font-weight: 700; margin-bottom: 16px;
-    padding-bottom: 8px; border-bottom: 2px solid #0078D4;
+    padding-bottom: 8px; border-bottom: 2px solid var(--cp-accent);
 }}
 .action-item {{
-    background: white; border-radius: 8px; padding: 16px; margin-bottom: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    background: var(--cp-surface); border-radius: 8px; padding: 16px; margin-bottom: 12px;
+    box-shadow: var(--cp-shadow);
 }}
 .action-header {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
-.action-num {{ font-weight: 700; color: #888; font-size: 12px; }}
+.action-num {{ font-weight: 700; color: var(--cp-text-soft); font-size: 12px; }}
 .severity-badge {{
-    color: white; padding: 2px 8px; border-radius: 4px;
+    color: var(--cp-accent-fg); padding: 2px 8px; border-radius: 4px;
     font-size: 10px; font-weight: 700; text-transform: uppercase;
 }}
 .pillar-tag {{
-    background: #f0f0f0; padding: 2px 8px; border-radius: 4px;
-    font-size: 10px; color: #555;
+    background: var(--cp-surface-soft); padding: 2px 8px; border-radius: 4px;
+    font-size: 10px; color: var(--cp-text-muted);
 }}
 .action-title {{ font-weight: 600; font-size: 14px; }}
-.action-desc {{ color: #555; margin-top: 8px; font-size: 13px; }}
+.action-desc {{ color: var(--cp-text-muted); margin-top: 8px; font-size: 13px; }}
 .resource-list {{
     margin-top: 8px; padding-left: 20px;
-    font-size: 11px; color: #666; max-height: 120px; overflow-y: auto;
+    font-size: 11px; color: var(--cp-text-muted); max-height: 120px; overflow-y: auto;
 }}
 .resource-list li {{ margin: 2px 0; }}
 
@@ -1255,23 +1658,23 @@ body {{
 }}
 @media (max-width: 900px) {{ .data-grid {{ grid-template-columns: 1fr; }} }}
 .table-card {{
-    background: white; border-radius: 10px; padding: 20px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08); min-width: 0;
+    background: var(--cp-surface); border-radius: 10px; padding: 20px;
+    box-shadow: var(--cp-shadow); min-width: 0;
 }}
-.table-card h3 {{ font-size: 14px; margin-bottom: 12px; color: #333; }}
+.table-card h3 {{ font-size: 14px; margin-bottom: 12px; color: var(--cp-text); }}
 .table-card table {{ table-layout: fixed; }}
 .table-card th,
 .table-card td {{ overflow-wrap: anywhere; white-space: normal; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
-th {{ background: #f5f5f5; padding: 8px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; }}
-td {{ padding: 6px 8px; border-bottom: 1px solid #eee; }}
-tr:hover td {{ background: #f8fbff; }}
+th {{ background: var(--cp-surface-soft); padding: 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--cp-border); }}
+td {{ padding: 6px 8px; border-bottom: 1px solid var(--cp-border); }}
+tr:hover td {{ background: var(--cp-accent-soft); }}
 .num {{ text-align: right; font-weight: 600; }}
 
 /* Footer */
 .footer {{
-    text-align: center; padding: 24px; color: #888; font-size: 11px;
-    border-top: 1px solid #ddd; margin-top: 32px;
+    text-align: center; padding: 24px; color: var(--cp-text-soft); font-size: 11px;
+    border-top: 1px solid var(--cp-border); margin-top: 32px;
 }}
 
 /* Bilingual toggle (default: English shown, Spanish hidden) */
@@ -1280,11 +1683,11 @@ body.lang-es .i18n-en {{ display: none; }}
 body.lang-es .i18n-es {{ display: inline; }}
 .lang-toggle {{
     position: absolute; top: 20px; right: 24px;
-    background: rgba(255,255,255,0.15); color: white;
-    border: 1px solid rgba(255,255,255,0.5); border-radius: 6px;
+    background: var(--cp-accent-hover); color: var(--cp-accent-fg);
+    border: 1px solid var(--cp-accent-fg); border-radius: 6px;
     padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
 }}
-.lang-toggle:hover {{ background: rgba(255,255,255,0.28); }}
+.lang-toggle:hover {{ background: var(--cp-accent); }}
 </style>
 </head>
 <body>
@@ -1297,6 +1700,12 @@ body.lang-es .i18n-es {{ display: inline; }}
     <div class="subtitle">{bi("Generated", "Generado")}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {bi("Consolidated view across all discovery phases", "Vista consolidada de todas las fases de descubrimiento")}</div>
 </div>
 
+<div class="view-tabs" role="tablist" aria-label="Dashboard views">
+    <button id="overviewTab" class="view-tab" role="tab" aria-selected="true" aria-controls="overviewView" onclick="setDashboardView('overview')" type="button">{bi('Overview', 'Resumen')}</button>
+    <button id="securityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="securityView" onclick="setDashboardView('security')" type="button">{bi('Security', 'Seguridad')}</button>
+</div>
+
+<main id="overviewView" class="dashboard-view" role="tabpanel" aria-labelledby="overviewTab">
 <!-- Overall Score + Pillar Breakdown -->
 <div class="score-section">
     <div class="overall-score">
@@ -1313,7 +1722,7 @@ body.lang-es .i18n-es {{ display: inline; }}
     <div class="stat-box"><div class="value">{total_subs}</div><div class="label">{bi("Subscriptions", "Suscripciones")}</div></div>
     <div class="stat-box"><div class="value">{total_resources:,}</div><div class="label">{bi("Total Resources", "Recursos Totales")}</div></div>
     <div class="stat-box"><div class="value">{total_actions}</div><div class="label">{bi("Action Items", "Elementos de Acci\u00f3n")}</div></div>
-    <div class="stat-box"><div class="value" style="color:#D13438;">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta")}</div></div>
+    <div class="stat-box"><div class="value" style="color:var(--cp-danger);">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta")}</div></div>
 </div>
 
 <!-- Governance Visualizer (Hierarchy Map) -->
@@ -1368,6 +1777,11 @@ body.lang-es .i18n-es {{ display: inline; }}
         </table>
     </div>
 </div>
+</main>
+
+<main id="securityView" class="dashboard-view" role="tabpanel" aria-labelledby="securityTab" hidden>
+    {security_view_html}
+</main>
 
 <!-- Footer -->
 <div class="footer">
@@ -1387,10 +1801,21 @@ function setLang(lang) {{
 function toggleLang() {{
     setLang(document.body.classList.contains('lang-es') ? 'en' : 'es');
 }}
+function setDashboardView(view) {{
+    var security = view === 'security';
+    document.getElementById('overviewView').hidden = security;
+    document.getElementById('securityView').hidden = !security;
+    document.getElementById('overviewTab').setAttribute('aria-selected', String(!security));
+    document.getElementById('securityTab').setAttribute('aria-selected', String(security));
+    try {{ localStorage.setItem('wafDashboardView', view); }} catch (e) {{}}
+}}
 (function() {{
     var saved = 'en';
     try {{ saved = localStorage.getItem('wafDashboardLang') || 'en'; }} catch (e) {{}}
     setLang(saved);
+    var savedView = 'overview';
+    try {{ savedView = localStorage.getItem('wafDashboardView') || 'overview'; }} catch (e) {{}}
+    setDashboardView(savedView === 'security' ? 'security' : 'overview');
 }})();
 </script>
 </body>
@@ -1440,7 +1865,7 @@ def main():
     generator = DashboardGenerator(engine, data, base_dir)
     html = generator.generate()
     
-    output_path = os.path.join(base_dir, "05_Dashboard", "WAF_Dashboard.html")
+    output_path = os.path.join(base_dir, "06_Dashboard", "WAF_Dashboard.html")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
