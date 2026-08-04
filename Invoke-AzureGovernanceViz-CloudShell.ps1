@@ -50,7 +50,7 @@ Write-Host "  Output:  $outputDir`n" -ForegroundColor Yellow
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-function Run-ARG {
+function Invoke-ARGQuery {
     param([string]$Query)
     $all = @(); $skip = $null
     do {
@@ -79,10 +79,8 @@ Write-Host "📊 Collecting data..." -ForegroundColor Green
 Write-Host "  [1/12] Management Group Hierarchy..." -ForegroundColor Gray
 
 $mgData = @()
-$mgPolicyCount = @{}
-$mgRoleCount = @{}
 
-function Collect-MGHierarchy {
+function Get-MGHierarchy {
     param([string]$GroupName, [int]$Level = 0, [string]$ParentPath = "")
     try {
         $mg = Get-AzManagementGroup -GroupName $GroupName -Expand -ErrorAction Stop
@@ -103,7 +101,7 @@ function Collect-MGHierarchy {
         }
 
         foreach ($child in $childMGs) {
-            Collect-MGHierarchy -GroupName $child.Name -Level ($Level + 1) -ParentPath $currentPath
+            Get-MGHierarchy -GroupName $child.Name -Level ($Level + 1) -ParentPath $currentPath
         }
     } catch {
         Write-Host "    ⚠️ Cannot expand MG: $GroupName ($($_.Exception.Message))" -ForegroundColor DarkYellow
@@ -111,10 +109,10 @@ function Collect-MGHierarchy {
 }
 
 try {
-    Collect-MGHierarchy -GroupName $tenantId
+    Get-MGHierarchy -GroupName $tenantId
 } catch {
     Write-Host "    Falling back to ARG for MG data..." -ForegroundColor DarkYellow
-    $mgData = Run-ARG -Query '
+    $mgData = Invoke-ARGQuery -Query '
     resourcecontainers
     | where type == "microsoft.management/managementgroups"
     | extend displayName = tostring(properties.displayName),
@@ -126,7 +124,7 @@ Export-Sheet -Data $mgData -Sheet "MgmtGroups"
 # ─── Subscriptions ───────────────────────────────────────────────────────────
 Write-Host "  [2/12] Subscriptions..." -ForegroundColor Gray
 
-$subscriptions = Run-ARG -Query '
+$subscriptions = Invoke-ARGQuery -Query '
 resourcecontainers
 | where type == "microsoft.resources/subscriptions"
 | extend state = tostring(properties.state),
@@ -138,7 +136,7 @@ Export-Sheet -Data $subscriptions -Sheet "Subscriptions"
 # ─── Policy Assignments ──────────────────────────────────────────────────────
 Write-Host "  [3/12] Policy Assignments..." -ForegroundColor Gray
 
-$policyAssignments = Run-ARG -Query '
+$policyAssignments = Invoke-ARGQuery -Query '
 policyresources
 | where type == "microsoft.authorization/policyassignments"
 | extend displayName = tostring(properties.displayName),
@@ -154,7 +152,7 @@ Export-Sheet -Data $policyAssignments -Sheet "PolicyAssignments"
 # ─── Custom Policy Definitions ───────────────────────────────────────────────
 Write-Host "  [4/12] Custom Policy Definitions..." -ForegroundColor Gray
 
-$customPolicies = Run-ARG -Query '
+$customPolicies = Invoke-ARGQuery -Query '
 policyresources
 | where type == "microsoft.authorization/policydefinitions"
 | where properties.policyType == "Custom"
@@ -168,7 +166,7 @@ Export-Sheet -Data $customPolicies -Sheet "CustomPolicies"
 # ─── Policy Compliance ───────────────────────────────────────────────────────
 Write-Host "  [5/12] Policy Compliance..." -ForegroundColor Gray
 
-$policyCompliance = Run-ARG -Query '
+$policyCompliance = Invoke-ARGQuery -Query '
 policyresources
 | where type == "microsoft.policyinsights/policystates"
 | where properties.complianceState != "Compliant"
@@ -182,7 +180,7 @@ Export-Sheet -Data $policyCompliance -Sheet "PolicyCompliance"
 # ─── RBAC Role Assignments ───────────────────────────────────────────────────
 Write-Host "  [6/12] RBAC Role Assignments..." -ForegroundColor Gray
 
-$roleAssignments = Run-ARG -Query '
+$roleAssignments = Invoke-ARGQuery -Query '
 authorizationresources
 | where type == "microsoft.authorization/roleassignments"
 | extend principalId = tostring(properties.principalId),
@@ -196,7 +194,7 @@ Export-Sheet -Data $roleAssignments -Sheet "RoleAssignments"
 # ─── Custom Role Definitions ─────────────────────────────────────────────────
 Write-Host "  [7/12] Custom Role Definitions..." -ForegroundColor Gray
 
-$customRoles = Run-ARG -Query '
+$customRoles = Invoke-ARGQuery -Query '
 authorizationresources
 | where type == "microsoft.authorization/roledefinitions"
 | where properties.type == "CustomRole"
@@ -209,7 +207,7 @@ Export-Sheet -Data $customRoles -Sheet "CustomRoles"
 # ─── Defender for Cloud ──────────────────────────────────────────────────────
 Write-Host "  [8/12] Microsoft Defender for Cloud..." -ForegroundColor Gray
 
-$defenderPlans = Run-ARG -Query '
+$defenderPlans = Invoke-ARGQuery -Query '
 securityresources
 | where type == "microsoft.security/pricings"
 | extend tier = tostring(properties.pricingTier),
@@ -218,7 +216,7 @@ securityresources
 | order by subscriptionId asc, name asc'
 Export-Sheet -Data $defenderPlans -Sheet "DefenderPlans"
 
-$secureScores = Run-ARG -Query '
+$secureScores = Invoke-ARGQuery -Query '
 securityresources
 | where type == "microsoft.security/securescores"
 | extend current_ = todouble(properties.score.current),
@@ -231,7 +229,7 @@ Export-Sheet -Data $secureScores -Sheet "SecureScores"
 # ─── Resources Summary ───────────────────────────────────────────────────────
 Write-Host "  [9/12] Resources Summary..." -ForegroundColor Gray
 
-$resourceSummary = Run-ARG -Query '
+$resourceSummary = Invoke-ARGQuery -Query '
 resources
 | summarize Count=count() by type, location, subscriptionId
 | order by Count desc'
@@ -240,26 +238,26 @@ Export-Sheet -Data $resourceSummary -Sheet "ResourceSummary"
 # ─── Orphaned Resources ──────────────────────────────────────────────────────
 Write-Host "  [10/12] Orphaned Resources..." -ForegroundColor Gray
 
-$orphanedDisks = Run-ARG -Query '
+$orphanedDisks = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.compute/disks"
 | where isnull(managedBy) or managedBy == ""
 | extend diskSizeGB=properties.diskSizeGB, skuName=sku.name
 | project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName'
 
-$orphanedNICs = Run-ARG -Query '
+$orphanedNICs = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/networkinterfaces"
 | where isnull(properties.virtualMachine) and isnull(properties.privateEndpoint)
 | project name, resourceGroup, subscriptionId, location'
 
-$orphanedPIPs = Run-ARG -Query '
+$orphanedPIPs = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/publicipaddresses"
 | where isnull(properties.ipConfiguration) and isnull(properties.natGateway)
 | project name, resourceGroup, subscriptionId, location'
 
-$orphanedNSGs = Run-ARG -Query '
+$orphanedNSGs = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/networksecuritygroups"
 | where isnull(properties.networkInterfaces) and isnull(properties.subnets)
@@ -275,7 +273,7 @@ Export-Sheet -Data $allOrphaned -Sheet "OrphanedResources"
 # ─── Network Topology ────────────────────────────────────────────────────────
 Write-Host "  [11/12] Network Topology..." -ForegroundColor Gray
 
-$vnets = Run-ARG -Query '
+$vnets = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/virtualnetworks"
 | extend addressSpace = tostring(properties.addressSpace.addressPrefixes),
@@ -288,7 +286,7 @@ Export-Sheet -Data $vnets -Sheet "VNets"
 # ─── Resource Locks ──────────────────────────────────────────────────────────
 Write-Host "  [12/12] Resource Locks..." -ForegroundColor Gray
 
-$locks = Run-ARG -Query '
+$locks = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.authorization/locks"
 | extend lockLevel = tostring(properties.level)
