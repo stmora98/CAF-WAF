@@ -7,7 +7,7 @@
       1. Invoke-AzureDiscovery-CloudShell.ps1       (Resource inventory)
       2. Invoke-AzureAdvisor-CloudShell.ps1         (Advisor recommendations)
       3. Invoke-AzureMetrics-CloudShell.ps1         (Right-sizing & reliability)
-      4. Invoke-AzureGovernanceViz-CloudShell.ps1   (Governance + HTML report)
+      4. Invoke-AzureGovernanceViz-CloudShell.ps1   (Governance data export)
     5. Invoke-AzureSecurity-CloudShell.ps1        (Defender posture + incidents)
     6. Invoke-AzureChecklists-CloudShell.ps1      (Azure/review-checklists ARG compliance)
     7. generate-dashboard.py                      (Consolidated dashboard + action items)
@@ -21,6 +21,10 @@
 
 .PARAMETER SkipMetrics
     Skip the metrics script (it is slower, queries per-resource). Use if short on time.
+
+.PARAMETER SkipFinOps
+    Skip the FinOps extended export (actual cost, reservation utilization, extra
+    optimization recommendations). Writes into 02_Advisor alongside AzureAdvisor.
 
 .PARAMETER KeepPrevious
     Archive an existing output folder (rename with a timestamp suffix) instead of
@@ -39,14 +43,16 @@
 param(
     [string]$OutputDir,
     [switch]$SkipMetrics,
+    [switch]$SkipFinOps,
     # By default each run wipes the previous output folder. Pass -KeepPrevious to
     # archive it (renamed with a timestamp suffix) instead of deleting it.
     [switch]$KeepPrevious,
     # Skip the interactive Microsoft Graph sign-in for Defender XDR incidents/alerts
     # during the Security phase (keeps Defender for Cloud CSPM + Endpoint data).
     [switch]$SkipGraphSecurity,
-    # Clears any cached Az context and disables WAM's silent single-account SSO for this
-    # run only, so the full sign-in page is shown and you can pick/switch accounts.
+    # Every run always shows the account picker (WAM SSO, so cached accounts are one click).
+    # Pass this to additionally disable WAM for the run and force a full interactive sign-in
+    # page - use it only if the normal picker itself seems stuck on a cached token.
     [switch]$ForceAccountSelection
 )
 
@@ -149,9 +155,15 @@ Write-Host "  All prerequisites satisfied.`n" -ForegroundColor Green
 function Connect-AzAccountWithWamFallback {
     param([switch]$ForceAccountSelection)
 
+    # Clear only the local Az PowerShell context (not the Windows/WAM account cache), so
+    # Connect-AzAccount always shows the account picker instead of silently reusing whichever
+    # account was last active - but WAM SSO still means picking a cached account is a single click.
+    Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null
+
     if ($ForceAccountSelection) {
-        Write-Host "  Clearing cached sign-in and forcing the account picker..." -ForegroundColor DarkGray
-        Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null
+        # Hard reset: also disable WAM so even the picker's cached tokens are bypassed and a
+        # full interactive sign-in page is shown. Use this if the account picker itself seems stuck.
+        Write-Host "  Forcing a full interactive sign-in (WAM disabled for this run)..." -ForegroundColor DarkGray
         if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
             try { Update-AzConfig -EnableLoginByWam $false -Scope Process -ErrorAction Stop | Out-Null } catch { }
         }
@@ -177,12 +189,11 @@ function Connect-AzAccountWithWamFallback {
     }
 }
 
+# Always show the account picker (SSO-backed via WAM, so cached accounts are one click -
+# no cached context is silently reused across runs).
+Write-Host "Signing in..." -ForegroundColor Yellow
+Connect-AzAccountWithWamFallback -ForceAccountSelection:$ForceAccountSelection
 $context = Get-AzContext
-if ($ForceAccountSelection -or -not $context) {
-    Write-Host "Not authenticated. Running Connect-AzAccount..." -ForegroundColor Yellow
-    Connect-AzAccountWithWamFallback -ForceAccountSelection:$ForceAccountSelection
-    $context = Get-AzContext
-}
 
 Write-Host "Azure WAF/CAF Workshop - Discovery Launcher" -ForegroundColor Cyan
 Write-Host "Tenant:  $($context.Tenant.Id)" -ForegroundColor Cyan
@@ -246,6 +257,15 @@ Write-Host "`n PHASE 2/7: Advisor Recommendations" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/02_Advisor"
 Invoke-PhaseWithValidation -Name "Advisor" -ScriptPath "$scriptDir/Invoke-AzureAdvisor-CloudShell.ps1" -OutputFolder "$OutputDir/02_Advisor"
 
+# === PHASE 2b: FinOps Extended (actual cost, reservation utilization, extra recs) ===
+if (-not $SkipFinOps) {
+    Write-Host "`n PHASE 2b: FinOps Extended Export" -ForegroundColor Cyan
+    $env:AZWORKSHOP_OUTPUT = "$OutputDir/02_Advisor"
+    Invoke-PhaseWithValidation -Name "FinOps" -ScriptPath "$scriptDir/Invoke-AzureFinOps-CloudShell.ps1" -OutputFolder "$OutputDir/02_Advisor"
+} else {
+    Write-Host "`n PHASE 2b: FinOps Extended Export - SKIPPED" -ForegroundColor DarkYellow
+}
+
 # === PHASE 3: Metrics (Right-Sizing) ===
 if (-not $SkipMetrics) {
     Write-Host "`n PHASE 3/7: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
@@ -298,7 +318,7 @@ Write-Host "Output:   $OutputDir" -ForegroundColor Green
 Write-Host "  01_Discovery/    - Resource inventory (Excel)" -ForegroundColor White
 Write-Host "  02_Advisor/      - Advisor recommendations (Excel)" -ForegroundColor White
 Write-Host "  03_Metrics/      - Right-sizing analysis (Excel)" -ForegroundColor White
-Write-Host "  04_Governance/   - Governance report (HTML + Excel)" -ForegroundColor White
+Write-Host "  04_Governance/   - Governance data export (Excel)" -ForegroundColor White
 Write-Host "  05_Security/     - Security posture and operations (Excel)" -ForegroundColor White
 Write-Host "  06_Checklists/   - Azure/review-checklists ARG compliance (Excel)" -ForegroundColor White
 Write-Host "  07_Dashboard/    - Consolidated dashboard (HTML)" -ForegroundColor White

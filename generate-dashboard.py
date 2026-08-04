@@ -20,6 +20,7 @@ import os
 import json
 import re
 import hashlib
+from collections import defaultdict
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -71,6 +72,14 @@ class DashboardConfig:
 def bi(en: str, es: str) -> str:
     """Wrap a piece of text in both language variants for the client-side toggle."""
     return f'<span class="i18n-en">{en}</span><span class="i18n-es">{es}</span>'
+
+
+def _cell_html(value) -> str:
+    """Escape a table cell value, except values already produced by bi() (pre-safe markup)."""
+    text = str(value)
+    if text.startswith('<span class="i18n-'):
+        return text
+    return escape(text)
 
 
 PILLAR_ES = {
@@ -171,6 +180,7 @@ class ExcelReader:
         data = {
             "discovery": {},
             "advisor": {},
+            "finops": {},
             "metrics": {},
             "governance": {},
             "security": {},
@@ -188,7 +198,13 @@ class ExcelReader:
         if path:
             data["advisor"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Advisor: {sum(len(v) for v in data['advisor'].values())} records across {len(data['advisor'])} sheets")
-        
+
+        # FinOps extended (actual cost, reservation utilization, extra recommendations)
+        path = ExcelReader.find_workbook(base_dir, "02_Advisor", "AzureFinOps")
+        if path:
+            data["finops"] = ExcelReader.read_workbook(path)
+            print(f"  ✓ FinOps: {sum(len(v) for v in data['finops'].values())} records across {len(data['finops'])} sheets")
+
         # Metrics
         path = ExcelReader.find_workbook(base_dir, "03_Metrics", "AzureMetrics")
         if path:
@@ -921,7 +937,43 @@ class InsightEngine:
                 "description_es": desc_es,
                 "resources": [f"{r.get('ResourceType', '')} {r.get('SkuName', '')} x{r.get('RecommendedQty', '?')} ({r.get('Term', '')})" for r in reservation_recs[:10]]
             })
-        
+
+        # FinOps extended recommendations (unattached public IPs, stopped VMs, backendless
+        # gateways/load balancers, empty SQL elastic pools, non-spot AKS pools, missing
+        # Hybrid Benefit) - the extra Azure Resource Graph checks FinOps Hub runs daily.
+        finops = self.data.get("finops", {})
+        extended_sheets = {
+            "UnattachedPublicIPs": ("Unattached Public IPs", "IPs Públicas No Adjuntas"),
+            "StoppedVMs": ("Stopped (not deallocated) VMs", "VMs Detenidas (no desasignadas)"),
+            "BackendlessAppGateways": ("Backendless Application Gateways", "Application Gateways sin Backend"),
+            "BackendlessLoadBalancers": ("Backendless Load Balancers", "Load Balancers sin Backend"),
+            "EmptySqlElasticPools": ("Empty SQL Elastic Pools", "Grupos Elásticos SQL Vacíos"),
+            "NonSpotAKSPools": ("Non-Spot autoscaling AKS pools", "Pools AKS con autoescalado sin Spot"),
+            "VMsWithoutHybridBenefit": ("VMs without Azure Hybrid Benefit", "VMs sin Azure Hybrid Benefit"),
+            "SqlVMsWithoutHybridBenefit": ("SQL VMs without Azure Hybrid Benefit", "VMs SQL sin Azure Hybrid Benefit"),
+        }
+        for sheet_name, (title_en, title_es) in extended_sheets.items():
+            rows = self._data_rows(finops.get(sheet_name, []))
+            if not rows:
+                continue
+            keys = {str(r.get("name", id(r))) for r in rows}
+            impacted_keys |= keys
+            sources.append({
+                "name": title_en,
+                "count": len(rows),
+                "unit": "resources",
+                "affected": len(keys),
+            })
+            self.action_items.append({
+                "pillar": "Cost Optimization",
+                "severity": "low",
+                "title": f"{len(rows)} {title_en}",
+                "title_es": f"{len(rows)} {title_es}",
+                "description": "Extra FinOps optimization check (mirrors Azure FinOps Hub's daily Resource Graph queries). Review and remediate if unused.",
+                "description_es": "Verificación adicional de optimización FinOps (equivalente a las consultas diarias de Resource Graph de Azure FinOps Hub). Revise y corrija si no se utiliza.",
+                "resources": [str(r.get("name", "")) for r in rows[:10]]
+            })
+
         if total_pool > 0:
             impacted = min(len(impacted_keys), total_pool)
             healthy = max(0, total_pool - impacted)
@@ -1711,7 +1763,7 @@ class DashboardGenerator:
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
-                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    f'<td class="{"num" if numeric else ""}">{_cell_html(row.get(key, ""))}</td>'
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
@@ -1764,8 +1816,124 @@ class DashboardGenerator:
             )
             return f'<div class="cost-dist">{bars}</div>'
 
+        def month_label(value):
+            if isinstance(value, datetime):
+                return value.strftime("%b %Y")
+            return str(value) if value not in (None, "") else ""
+
+        def month_sort_key(value):
+            return value if isinstance(value, datetime) else datetime.min
+
+        def render_cost_trend_chart(rows):
+            """FinOps Hub-style monthly cost trend: area chart + MoM delta badge."""
+            monthly = defaultdict(float)
+            for r in rows:
+                monthly[r.get("BillingMonth")] += as_float(r.get("Cost"))
+            months = sorted(monthly.keys(), key=month_sort_key)
+            if not months:
+                return ""
+            values = [monthly[m] for m in months]
+            labels = [month_label(m) for m in months]
+            n, max_val = len(values), max(values) or 1
+            width, height, pad_l, pad_r, pad_t, pad_b = 1000, 260, 24, 24, 40, 34
+            plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+            xs = [width / 2] if n == 1 else [pad_l + i * (plot_w / (n - 1)) for i in range(n)]
+            ys = [pad_t + plot_h - (v / max_val * plot_h) for v in values]
+            points = list(zip(xs, ys))
+            line_d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+            area_d = line_d + f" L {xs[-1]:.1f},{pad_t + plot_h:.1f} L {xs[0]:.1f},{pad_t + plot_h:.1f} Z"
+            grid = "".join(
+                f'<line x1="{pad_l}" y1="{pad_t + plot_h * f:.1f}" x2="{width - pad_r}" y2="{pad_t + plot_h * f:.1f}" class="trend-grid-line" />'
+                for f in (0, 0.5, 1)
+            )
+            dots = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" class="trend-dot" />' for x, y in points)
+            value_labels = "".join(
+                f'<text x="{x:.1f}" y="{max(y - 12, 14):.1f}" text-anchor="middle" class="trend-value-label">${v:,.0f}</text>'
+                for (x, y), v in zip(points, values)
+            )
+            month_labels = "".join(
+                f'<text x="{x:.1f}" y="{height - 10}" text-anchor="middle" class="trend-month-label">{escape(lbl)}</text>'
+                for x, lbl in zip(xs, labels)
+            )
+            delta_html = ""
+            if n >= 2 and values[-2]:
+                delta_pct = (values[-1] - values[-2]) / values[-2] * 100
+                arrow, color = ("\u25b2", "var(--cp-danger)") if delta_pct > 0 else ("\u25bc", "var(--cp-success)")
+                if abs(delta_pct) < 0.05:
+                    arrow, color = "\u25cf", "var(--cp-text-muted)"
+                delta_html = (
+                    f'<span class="finops-trend-delta" style="color:{color};">{arrow} {abs(delta_pct):.1f}% '
+                    f'{bi("vs prior month", "vs. mes anterior")}</span>'
+                )
+            return f"""<div class="finops-trend-card">
+                <div class="finops-trend-head">
+                    <div>
+                        <span class="finops-trend-total">${values[-1]:,.0f}</span>
+                        <span class="finops-trend-total-label">{bi("latest month", "\u00faltimo mes")}</span>
+                    </div>
+                    {delta_html}
+                </div>
+                <svg viewBox="0 0 {width} {height}" class="finops-trend-svg">
+                    <defs>
+                        <linearGradient id="costTrendGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="var(--cp-accent)" stop-opacity="0.35" />
+                            <stop offset="100%" stop-color="var(--cp-accent)" stop-opacity="0" />
+                        </linearGradient>
+                    </defs>
+                    {grid}
+                    <path d="{area_d}" fill="url(#costTrendGrad)" stroke="none" />
+                    <path d="{line_d}" fill="none" stroke="var(--cp-accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+                    {dots}
+                    {value_labels}
+                    {month_labels}
+                </svg>
+            </div>"""
+
+        def render_cost_breakdown_bars(rows, group_key, empty_en, empty_es, limit=6):
+            """Horizontal $ bar breakdown by a dimension (service, subscription), FinOps Hub-style."""
+            totals = defaultdict(float)
+            for r in rows:
+                totals[str(r.get(group_key) or "Unknown")] += as_float(r.get("Cost"))
+            if not totals:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            items = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+            total_all = sum(v for _, v in items) or 1
+            top = items[:limit]
+            other_total = sum(v for _, v in items[limit:])
+            if other_total > 0:
+                top.append((bi("Other", "Otros"), other_total))
+            max_val = max(v for _, v in top) if top else 1
+            rows_html = "".join(
+                f"""<div class="cost-bar-row">
+                    <span class="cost-bar-label">{_cell_html(name)}</span>
+                    <div class="cost-bar-track"><div class="cost-bar-fill" style="width:{(v / max_val * 100) if max_val else 0:.1f}%;"></div></div>
+                    <span class="cost-bar-value">${v:,.0f}</span>
+                    <span class="cost-bar-pct">{(v / total_all * 100):.0f}%</span>
+                </div>"""
+                for name, v in top
+            )
+            return f'<div class="cost-bar-chart">{rows_html}</div>'
+
         cost_recs = real_rows(advisor, "Cost")
         reservation_recs = [r for r in real_rows(advisor, "ReservationRecommendations") if r.get("ResourceType") or r.get("SkuName")]
+        finops = self.data.get("finops", {})
+        actual_cost_rows = [r for r in real_rows(finops, "ActualCost") if r.get("Cost") not in (None, "")]
+        extended_sheets = [
+            ("UnattachedPublicIPs", bi("Unattached Public IPs", "IPs P\u00fablicas No Adjuntas")),
+            ("StoppedVMs", bi("Stopped (not deallocated) VMs", "VMs Detenidas (no desasignadas)")),
+            ("BackendlessAppGateways", bi("Backendless App Gateways", "App Gateways sin Backend")),
+            ("BackendlessLoadBalancers", bi("Backendless Load Balancers", "Load Balancers sin Backend")),
+            ("EmptySqlElasticPools", bi("Empty SQL Elastic Pools", "Grupos El\u00e1sticos SQL Vac\u00edos")),
+            ("NonSpotAKSPools", bi("Non-Spot AKS Pools", "Pools AKS sin Spot")),
+            ("VMsWithoutHybridBenefit", bi("VMs w/o Hybrid Benefit", "VMs sin Hybrid Benefit")),
+            ("SqlVMsWithoutHybridBenefit", bi("SQL VMs w/o Hybrid Benefit", "VMs SQL sin Hybrid Benefit")),
+        ]
+        extended_recs = []
+        for sheet_name, label in extended_sheets:
+            for row in real_rows(finops, sheet_name):
+                row = dict(row)
+                row["CheckType"] = label
+                extended_recs.append(row)
         vm_rightsizing = sorted(real_rows(metrics, "VM_RightSizing"), key=lambda r: waste_priority(r.get("Assessment")))
         sql_rightsizing = sorted(real_rows(metrics, "SQL_RightSizing"), key=lambda r: waste_priority(r.get("Assessment")))
         plan_rightsizing = sorted(real_rows(metrics, "AppPlan_RightSizing"), key=lambda r: waste_priority(r.get("Assessment")))
@@ -1787,6 +1955,8 @@ class DashboardGenerator:
         savings_text = f"${total_savings:,.0f}" if total_savings > 0 else "N/A"
 
         orphaned_total = len(orphaned) + len(dealloc_vms) + len(unattached_disks)
+        total_actual_cost = sum(as_float(r.get("Cost")) for r in actual_cost_rows)
+        actual_cost_currency = next((r.get("Currency") for r in actual_cost_rows if r.get("Currency")), "USD")
 
         stats = [
             (savings_text, bi("Est. Annual Savings", "Ahorro Anual Est."), "security-accent"),
@@ -1797,7 +1967,10 @@ class DashboardGenerator:
             (len(plan_waste), bi("App Plans to Rightsize", "Planes App para Ajustar"), "security-warning"),
             (len(storage_waste), bi("Low-activity Storage", "Almacenamiento de Baja Actividad"), "security-warning"),
             (orphaned_total, bi("Orphaned/Unused Resources", "Recursos Hu\u00e9rfanos/No Usados"), "security-danger"),
+            (len(extended_recs), bi("Extended FinOps Checks", "Verificaciones FinOps Extendidas"), "security-warning"),
         ]
+        if actual_cost_rows:
+            stats.insert(1, (f"{total_actual_cost:,.0f} {actual_cost_currency}", bi("Actual Cost (6mo)", "Costo Real (6 meses)"), ""))
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
             for value, label, color_class in stats
@@ -1874,6 +2047,31 @@ class DashboardGenerator:
             ("diskSizeGB", "Size (GB)", "Tama\u00f1o (GB)", True),
             ("skuName", "SKU", "SKU", False),
         ], "No unattached disks found.", "No se encontraron discos no adjuntos.")
+        actual_cost_sorted = sorted(actual_cost_rows, key=lambda r: as_float(r.get("Cost")), reverse=True)
+        for r in actual_cost_sorted:
+            r["CostDisplay"] = f"{as_float(r.get('Cost')):,.2f} {r.get('Currency', '') or ''}".strip()
+            r["MonthDisplay"] = month_label(r.get("BillingMonth"))
+        actual_cost_table = render_table(actual_cost_sorted, [
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
+            ("ServiceName", "Service", "Servicio", False),
+            ("MonthDisplay", "Month", "Mes", False),
+            ("CostDisplay", "Cost", "Costo", True),
+        ], "No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).", limit=20)
+        cost_trend_chart = render_cost_trend_chart(actual_cost_rows)
+        cost_by_service_bars = render_cost_breakdown_bars(
+            actual_cost_rows, "ServiceName",
+            "No service cost data found.", "No se encontraron datos de costo por servicio.",
+        )
+        cost_by_subscription_bars = render_cost_breakdown_bars(
+            actual_cost_rows, "Subscription",
+            "No subscription cost data found.", "No se encontraron datos de costo por suscripci\u00f3n.",
+        )
+        extended_recs_table = render_table(extended_recs, [
+            ("CheckType", "Check", "Verificaci\u00f3n", False),
+            ("name", "Resource", "Recurso", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("location", "Location", "Ubicaci\u00f3n", False),
+        ], "No extended FinOps findings.", "No se encontraron hallazgos FinOps extendidos.", limit=20)
 
         return f"""
         <div class="security-summary-band">
@@ -1885,6 +2083,15 @@ class DashboardGenerator:
             <div class="security-score-mark" style="color: var(--cp-success);">{savings_text}</div>
         </div>
         <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Cost trends', 'Tendencias de costos')}</div>
+            {cost_trend_chart if cost_trend_chart else f'<p class="empty-state">{bi("No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).")}</p>'}
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Cost by service', 'Costo por servicio')}</h3>{cost_by_service_bars}</div>
+                <div class="security-panel"><h3>{bi('Cost by subscription', 'Costo por suscripci\u00f3n')}</h3>{cost_by_subscription_bars}</div>
+            </div>
+        </div>
 
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o')}</div>
@@ -1907,6 +2114,14 @@ class DashboardGenerator:
                 <h3>{bi('Orphaned resources (all types)', 'Recursos hu\u00e9rfanos (todos los tipos)')}</h3>
                 {orphaned_table}
             </div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Actual spend (last 6 months)', 'Gasto real (\u00faltimos 6 meses)')}</div>
+            {actual_cost_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Extended FinOps checks', 'Verificaciones FinOps extendidas')}</div>
+            {extended_recs_table}
         </div>
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Advisor cost recommendations', 'Recomendaciones de costos de Advisor')}</div>
@@ -2666,6 +2881,26 @@ body {{
 .cost-dist-track {{ height: 6px; border-radius: 980px; background: var(--cp-surface-soft); overflow: hidden; }}
 .cost-dist-fill {{ height: 100%; border-radius: 980px; }}
 .cost-dist-count {{ text-align: right; font-weight: 600; }}
+.finops-trend-card {{
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md);
+    box-shadow: var(--cp-shadow); padding: 20px 22px 8px; margin-bottom: 18px;
+}}
+.finops-trend-head {{ display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }}
+.finops-trend-total {{ font-size: 30px; font-weight: 700; letter-spacing: -0.02em; color: var(--cp-accent); }}
+.finops-trend-total-label {{ color: var(--cp-text-muted); font-size: 12px; margin-left: 8px; }}
+.finops-trend-delta {{ font-size: 13px; font-weight: 600; }}
+.finops-trend-svg {{ width: 100%; height: auto; aspect-ratio: 1000 / 260; display: block; }}
+.trend-grid-line {{ stroke: var(--cp-border); stroke-width: 1; stroke-dasharray: 4 4; }}
+.trend-dot {{ fill: var(--cp-accent); stroke: var(--cp-surface); stroke-width: 2; }}
+.trend-value-label {{ font-size: 15px; fill: var(--cp-text); font-weight: 600; }}
+.trend-month-label {{ font-size: 15px; fill: var(--cp-text-muted); }}
+.cost-bar-chart {{ display: flex; flex-direction: column; gap: 10px; }}
+.cost-bar-row {{ display: grid; grid-template-columns: minmax(90px, 0.9fr) 2fr auto 34px; align-items: center; gap: 10px; font-size: 12px; }}
+.cost-bar-label {{ color: var(--cp-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.cost-bar-track {{ height: 8px; border-radius: 980px; background: var(--cp-surface-soft); overflow: hidden; }}
+.cost-bar-fill {{ height: 100%; border-radius: 980px; background: linear-gradient(90deg, var(--cp-accent), var(--cp-success)); }}
+.cost-bar-value {{ font-weight: 700; white-space: nowrap; }}
+.cost-bar-pct {{ color: var(--cp-text-muted); text-align: right; }}
 @media (max-width: 1050px) {{ .security-stats {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
 @media (max-width: 760px) {{
     .view-tabs {{ width: 100%; }}
