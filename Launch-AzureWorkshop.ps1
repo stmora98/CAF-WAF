@@ -44,7 +44,10 @@ param(
     [switch]$KeepPrevious,
     # Skip the interactive Microsoft Graph sign-in for Defender XDR incidents/alerts
     # during the Security phase (keeps Defender for Cloud CSPM + Endpoint data).
-    [switch]$SkipGraphSecurity
+    [switch]$SkipGraphSecurity,
+    # Clears any cached Az context and disables WAM's silent single-account SSO for this
+    # run only, so the full sign-in page is shown and you can pick/switch accounts.
+    [switch]$ForceAccountSelection
 )
 
 $ErrorActionPreference = 'Continue'
@@ -141,7 +144,21 @@ if ($pythonCmd) {
 Write-Host "  All prerequisites satisfied.`n" -ForegroundColor Green
 
 # Prefers the WAM broker (Windows Hello/Conditional Access support); falls back to device-code login if the broker fails.
+# -ForceAccountSelection disables WAM (process scope only, doesn't touch the saved user preference) so
+# WAM's silent single-cached-account SSO is bypassed and the full account-picker sign-in page is shown.
 function Connect-AzAccountWithWamFallback {
+    param([switch]$ForceAccountSelection)
+
+    if ($ForceAccountSelection) {
+        Write-Host "  Clearing cached sign-in and forcing the account picker..." -ForegroundColor DarkGray
+        Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null
+        if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
+            try { Update-AzConfig -EnableLoginByWam $false -Scope Process -ErrorAction Stop | Out-Null } catch { }
+        }
+        Connect-AzAccount -ErrorAction Stop
+        return
+    }
+
     if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
         try {
             Update-AzConfig -EnableLoginByWam $true -ErrorAction Stop | Out-Null
@@ -161,9 +178,9 @@ function Connect-AzAccountWithWamFallback {
 }
 
 $context = Get-AzContext
-if (-not $context) {
+if ($ForceAccountSelection -or -not $context) {
     Write-Host "Not authenticated. Running Connect-AzAccount..." -ForegroundColor Yellow
-    Connect-AzAccountWithWamFallback
+    Connect-AzAccountWithWamFallback -ForceAccountSelection:$ForceAccountSelection
     $context = Get-AzContext
 }
 
