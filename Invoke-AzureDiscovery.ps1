@@ -53,7 +53,7 @@ if (-not $OutputPath) {
 }
 
 # Ensure required modules
-function Ensure-Module {
+function Install-RequiredModule {
     param([string]$Name)
     if (-not (Get-Module -ListAvailable -Name $Name)) {
         Write-Host "Installing module $Name..." -ForegroundColor Yellow
@@ -62,9 +62,9 @@ function Ensure-Module {
     Import-Module $Name -Force
 }
 
-Ensure-Module 'Az.Accounts'
-Ensure-Module 'Az.ResourceGraph'
-Ensure-Module 'ImportExcel'
+Install-RequiredModule 'Az.Accounts'
+Install-RequiredModule 'Az.ResourceGraph'
+Install-RequiredModule 'ImportExcel'
 
 # Prefers the WAM broker (Windows Hello/Conditional Access support); falls back to device-code login if the broker fails.
 # -ForceAccountSelection disables WAM (process scope only, doesn't touch the saved user preference) so
