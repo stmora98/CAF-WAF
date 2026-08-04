@@ -61,15 +61,36 @@ Ensure-Module 'Az.Accounts'
 Ensure-Module 'Az.ResourceGraph'
 Ensure-Module 'ImportExcel'
 
+# Prefers the WAM broker (Windows Hello/Conditional Access support); falls back to device-code login if the broker fails.
+function Connect-AzAccountWithWamFallback {
+    param([string]$TenantId)
+
+    $connectParams = @{}
+    if ($TenantId) { $connectParams['TenantId'] = $TenantId }
+
+    if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
+        try {
+            Update-AzConfig -EnableLoginByWam $true -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Host "  Could not enable WAM broker login ($($_.Exception.Message)) - continuing with default login method." -ForegroundColor DarkYellow
+        }
+    }
+    try {
+        Connect-AzAccount @connectParams -ErrorAction Stop
+    } catch {
+        Write-Host "  WAM sign-in failed ($($_.Exception.Message)). Retrying with device code authentication..." -ForegroundColor DarkYellow
+        if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
+            try { Update-AzConfig -EnableLoginByWam $false -ErrorAction Stop | Out-Null } catch { }
+        }
+        Connect-AzAccount @connectParams -UseDeviceAuthentication
+    }
+}
+
 # Verify authentication
 $context = Get-AzContext
 if (-not $context) {
     Write-Host "Not authenticated. Running Connect-AzAccount..." -ForegroundColor Yellow
-    if ($TenantId) {
-        Connect-AzAccount -TenantId $TenantId
-    } else {
-        Connect-AzAccount
-    }
+    Connect-AzAccountWithWamFallback -TenantId $TenantId
     $context = Get-AzContext
 }
 

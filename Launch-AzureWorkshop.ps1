@@ -140,10 +140,30 @@ if ($pythonCmd) {
 
 Write-Host "  All prerequisites satisfied.`n" -ForegroundColor Green
 
+# Prefers the WAM broker (Windows Hello/Conditional Access support); falls back to device-code login if the broker fails.
+function Connect-AzAccountWithWamFallback {
+    if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
+        try {
+            Update-AzConfig -EnableLoginByWam $true -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Host "  Could not enable WAM broker login ($($_.Exception.Message)) - continuing with default login method." -ForegroundColor DarkYellow
+        }
+    }
+    try {
+        Connect-AzAccount -ErrorAction Stop
+    } catch {
+        Write-Host "  WAM sign-in failed ($($_.Exception.Message)). Retrying with device code authentication..." -ForegroundColor DarkYellow
+        if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
+            try { Update-AzConfig -EnableLoginByWam $false -ErrorAction Stop | Out-Null } catch { }
+        }
+        Connect-AzAccount -UseDeviceAuthentication
+    }
+}
+
 $context = Get-AzContext
 if (-not $context) {
     Write-Host "Not authenticated. Running Connect-AzAccount..." -ForegroundColor Yellow
-    Connect-AzAccount
+    Connect-AzAccountWithWamFallback
     $context = Get-AzContext
 }
 
