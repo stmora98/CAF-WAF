@@ -1331,6 +1331,122 @@ class DashboardGenerator:
             {self._render_actions_for_pillar("Security")}
         </div>"""
 
+    def _recommend_azure_resources(self) -> list:
+        """Recommend Azure capabilities only when generated action items provide evidence for them."""
+        rules = [
+            {
+                "name": "Azure Policy",
+                "name_es": "Azure Policy",
+                "description": "Standardize configuration and remediate policy, compliance, tagging, public-access, and resource-protection gaps at scale.",
+                "description_es": "Estandarice la configuración y corrija a escala las brechas de políticas, cumplimiento, etiquetado, acceso público y protección de recursos.",
+                "keywords": ("policy assignment", "policy evaluation", "policy compliance", "non-compliant", "compliance", "tagging", "no tags", "resource lock", "public access"),
+                "url": "https://learn.microsoft.com/azure/governance/policy/overview",
+            },
+            {
+                "name": "Log Analytics workspace + Azure Monitor",
+                "name_es": "Área de trabajo de Log Analytics + Azure Monitor",
+                "description": "Centralize diagnostic logs, metrics, alerts, and operational queries for resources that lack observability or show capacity pressure.",
+                "description_es": "Centralice registros de diagnóstico, métricas, alertas y consultas operativas para recursos sin observabilidad o con presión de capacidad.",
+                "keywords": ("diagnostic", "log analytics", "observability", "monitoring", "metric", "cpu", "saturat", "performance"),
+                "url": "https://learn.microsoft.com/azure/azure-monitor/fundamentals/overview",
+            },
+            {
+                "name": "Recovery Services vault + Azure Backup",
+                "name_es": "Almacén de Recovery Services + Azure Backup",
+                "description": "Provide centralized backup policy, protected recovery points, and restore operations for workloads with missing or weak data protection.",
+                "description_es": "Proporcione políticas de copia de seguridad centralizadas, puntos de recuperación protegidos y operaciones de restauración para cargas con protección de datos insuficiente.",
+                "keywords": ("backup", "recovery services", "recovery vault", "restore", "recovery point"),
+                "url": "https://learn.microsoft.com/azure/backup/backup-overview",
+            },
+            {
+                "name": "Azure DDoS Network Protection plan",
+                "name_es": "Plan de Azure DDoS Network Protection",
+                "description": "Protect internet-facing virtual networks with adaptive DDoS mitigation, telemetry, and attack support.",
+                "description_es": "Proteja redes virtuales expuestas a Internet con mitigación DDoS adaptativa, telemetría y soporte ante ataques.",
+                "keywords": ("ddos",),
+                "url": "https://learn.microsoft.com/azure/ddos-protection/ddos-protection-overview",
+            },
+            {
+                "name": "Microsoft Defender for Cloud",
+                "name_es": "Microsoft Defender for Cloud",
+                "description": "Improve cloud security posture, prioritize high-risk recommendations, and add workload protection where coverage is missing.",
+                "description_es": "Mejore la postura de seguridad, priorice recomendaciones de alto riesgo y agregue protección de cargas donde falte cobertura.",
+                "keywords": ("defender", "secure score", "cspm", "mcsb", "security posture", "vulnerab", "security recommendation", "tls"),
+                "url": "https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction",
+            },
+            {
+                "name": "Microsoft Sentinel",
+                "name_es": "Microsoft Sentinel",
+                "description": "Centralize security incidents and alerts for investigation, automation, and coordinated response.",
+                "description_es": "Centralice incidentes y alertas de seguridad para investigación, automatización y respuesta coordinada.",
+                "keywords": ("security incident", "xdr incident", "security alert", "xdr alert"),
+                "url": "https://learn.microsoft.com/azure/sentinel/overview",
+            },
+            {
+                "name": "Azure Key Vault",
+                "name_es": "Azure Key Vault",
+                "description": "Centralize secrets, keys, and certificates with controlled access, rotation, and lifecycle protection.",
+                "description_es": "Centralice secretos, claves y certificados con acceso controlado, rotación y protección del ciclo de vida.",
+                "keywords": ("key vault", "secret", "certificate", "credential", "access key"),
+                "url": "https://learn.microsoft.com/azure/key-vault/general/overview",
+            },
+            {
+                "name": "Azure Cost Management budgets",
+                "name_es": "Presupuestos de Azure Cost Management",
+                "description": "Add budget guardrails and cost alerts while teams remove idle assets, right-size workloads, and evaluate commitment discounts.",
+                "description_es": "Agregue controles presupuestarios y alertas de costos mientras los equipos eliminan activos inactivos, ajustan cargas y evalúan descuentos por compromiso.",
+                "keywords": ("cost", "orphan", "unused", "underutil", "idle", "savings", "rightsiz", "reservation", "deallocated", "unattached"),
+                "url": "https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets",
+            },
+        ]
+        severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+        recommendations = []
+        for rule in rules:
+            evidence = []
+            for item in self.engine.action_items:
+                searchable = " ".join(str(item.get(field, "")) for field in ("title", "description")).lower()
+                if any(keyword in searchable for keyword in rule["keywords"]):
+                    evidence.append(item)
+            if not evidence:
+                continue
+            highest = max((severity_rank.get(str(item.get("severity", "")).lower(), 0) for item in evidence), default=0)
+            priority = "high" if highest >= 3 else "medium" if highest == 2 else "low"
+            recommendations.append({**rule, "evidence": evidence, "priority": priority})
+
+        priority_rank = {"high": 0, "medium": 1, "low": 2}
+        return sorted(recommendations, key=lambda rec: (priority_rank[rec["priority"]], -len(rec["evidence"]), rec["name"]))
+
+    def _render_azure_resource_recommendations(self) -> str:
+        recommendations = self._recommend_azure_resources()
+        if not recommendations:
+            return f'<p class="empty-state">{bi("No additional Azure resources are indicated by the current findings.", "Los hallazgos actuales no indican recursos adicionales de Azure.")}</p>'
+
+        priority_es = {"high": "Alta", "medium": "Media", "low": "Baja"}
+        cards = []
+        for recommendation in recommendations:
+            evidence_items = "".join(
+                f'<li>{bi(escape(str(item.get("title", ""))), escape(str(item.get("title_es", item.get("title", "")))))}</li>'
+                for item in recommendation["evidence"][:3]
+            )
+            remaining = len(recommendation["evidence"]) - 3
+            if remaining > 0:
+                evidence_items += f'<li class="resource-rec-more">{bi(f"+ {remaining} more supporting findings", f"+ {remaining} hallazgos de soporte adicionales")}</li>'
+            priority = recommendation["priority"]
+            cards.append(f"""<article class="resource-rec-card resource-rec-{priority}">
+                <div class="resource-rec-heading">
+                    <div>
+                        <span class="resource-rec-priority">{bi(priority.title() + ' priority', 'Prioridad ' + priority_es[priority])}</span>
+                        <h3>{bi(escape(recommendation['name']), escape(recommendation['name_es']))}</h3>
+                    </div>
+                    <span class="resource-rec-count">{len(recommendation['evidence'])} {bi('findings', 'hallazgos')}</span>
+                </div>
+                <p>{bi(escape(recommendation['description']), escape(recommendation['description_es']))}</p>
+                <div class="resource-rec-evidence-label">{bi('Recommended because', 'Recomendado por')}</div>
+                <ul>{evidence_items}</ul>
+                <a class="resource-rec-link" href="{escape(recommendation['url'])}" target="_blank" rel="noopener">{bi('Review on Microsoft Learn', 'Revisar en Microsoft Learn')} &rarr;</a>
+            </article>""")
+        return f'<div class="resource-rec-grid">{"".join(cards)}</div>'
+
     def _render_governance_view(self) -> str:
         """Render management-group hierarchy, policy/RBAC, and scope details natively (no iframe to a separate HTML file)."""
         gov = self.data.get("governance", {})
@@ -2643,6 +2759,32 @@ body {{
 .cost-findings-col {{ width: 26%; }}
 
 /* Governance view (native hierarchy tree, scope insights) */
+.resource-rec-intro {{ color: var(--cp-text-muted); font-size: 12px; margin: -6px 0 16px; max-width: 900px; }}
+.resource-rec-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }}
+.resource-rec-card {{
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-top: 3px solid var(--cp-link);
+    border-radius: var(--cp-radius-md); padding: 18px; min-width: 0; box-shadow: var(--cp-shadow);
+}}
+.resource-rec-card.resource-rec-high {{ border-top-color: var(--cp-danger); }}
+.resource-rec-card.resource-rec-medium {{ border-top-color: var(--cp-warning); }}
+.resource-rec-card.resource-rec-low {{ border-top-color: var(--cp-link); }}
+.resource-rec-heading {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }}
+.resource-rec-heading h3 {{ font-size: 15px; font-weight: 650; margin-top: 3px; }}
+.resource-rec-priority {{ color: var(--cp-text-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0; }}
+.resource-rec-high .resource-rec-priority {{ color: var(--cp-danger); }}
+.resource-rec-medium .resource-rec-priority {{ color: var(--cp-warning); }}
+.resource-rec-count {{
+    background: var(--cp-surface-soft); color: var(--cp-text-muted); border-radius: 6px;
+    padding: 4px 7px; font-size: 10px; font-weight: 650; white-space: nowrap;
+}}
+.resource-rec-card > p {{ color: var(--cp-text-muted); font-size: 12px; margin-bottom: 14px; }}
+.resource-rec-evidence-label {{ font-size: 10px; font-weight: 700; margin-bottom: 5px; }}
+.resource-rec-card ul {{ padding-left: 17px; margin-bottom: 14px; }}
+.resource-rec-card li {{ color: var(--cp-text-muted); font-size: 11px; margin: 4px 0; }}
+.resource-rec-card li::marker {{ color: var(--cp-accent); }}
+.resource-rec-card .resource-rec-more {{ color: var(--cp-text-soft); }}
+.resource-rec-link {{ color: var(--cp-link); font-size: 11px; font-weight: 650; text-decoration: none; }}
+.resource-rec-link:hover {{ text-decoration: underline; }}
 .mg-tree, .mg-tree ul {{ list-style: none; padding-left: 30px; }}
 .mg-tree {{ padding-left: 0; }}
 .mg-tree li {{ margin: 8px 0; }}
@@ -2681,6 +2823,10 @@ body {{
 .table-more-note .less-label {{ display: none; }}
 .table-more-note.expanded .more-label {{ display: none; }}
 .table-more-note.expanded .less-label {{ display: inline; }}
+@media (max-width: 700px) {{
+    .resource-rec-grid {{ grid-template-columns: minmax(0, 1fr); }}
+    .resource-rec-heading {{ align-items: flex-start; }}
+}}
 
 /* Stats */
 .stats-row {{
@@ -2890,6 +3036,13 @@ body.lang-es .i18n-es {{ display: inline; }}
     <div class="breakdown-grid">
         {score_breakdown_html}
     </div>
+</div>
+
+<!-- Recommended Azure Resources -->
+<div class="section resource-recommendations">
+    <div class="section-title security-title">{bi('Recommended Azure resources & services', 'Recursos y servicios de Azure recomendados')}</div>
+    <p class="resource-rec-intro">{bi('These suggestions are derived from all generated recommendations and action items. Validate architecture, licensing, and cost before deployment.', 'Estas sugerencias se derivan de todas las recomendaciones y elementos de acción generados. Valide la arquitectura, las licencias y el costo antes de implementar.')}</p>
+    {self._render_azure_resource_recommendations()}
 </div>
 
 <!-- Action Items -->

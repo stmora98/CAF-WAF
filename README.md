@@ -151,6 +151,7 @@ The Python agent produces a **WAF_Dashboard.html** with:
 - **Resource Summary** tables
 - **Advisor Findings** aggregated view
 - **Dedicated Security tab** for CSPM recommendations, MCSB compliance, Defender plans, XDR incidents/alerts, Endpoint exposure, and source coverage
+- **Governance resource recommendations** derived from the generated findings, with priority, supporting action items, and Microsoft Learn guidance
 
 ### Scoring Logic
 
