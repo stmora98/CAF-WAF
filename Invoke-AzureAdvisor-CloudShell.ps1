@@ -134,6 +134,59 @@ advisorresources
 | summarize Count=count() by impactedType, category
 | order by Count desc'
 
+# Reservation / Savings Plan recommendations (rate optimization) - subscription-scoped
+# REST call, not Resource Graph, since these come from Microsoft.Consumption, not ARG.
+Write-Host "`nChecking reservation & savings plan recommendations..." -ForegroundColor Cyan
+$reservationRows = @()
+try {
+    $tokenResponse = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/'
+    $accessToken = if ($tokenResponse.Token -is [System.Security.SecureString]) {
+        [System.Net.NetworkCredential]::new('', $tokenResponse.Token).Password
+    } else { [string]$tokenResponse.Token }
+    $headers = @{ Authorization = "Bearer $accessToken" }
+
+    $subs = Get-AzSubscription -ErrorAction Stop
+    foreach ($sub in $subs) {
+        $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/reservationRecommendations?api-version=2021-10-01"
+        try {
+            $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+            foreach ($item in @($resp.value)) {
+                $p = $item.properties
+                $reservationRows += [PSCustomObject]@{
+                    Subscription      = $sub.Name
+                    SubscriptionId    = $sub.Id
+                    ResourceType      = $p.resourceType
+                    SkuName           = $p.skuName
+                    Location          = $p.location
+                    Term              = $p.term
+                    LookBackPeriod    = $p.lookBackPeriod
+                    RecommendedQty    = $p.recommendedQuantity
+                    CostWithNoRI      = $p.costWithNoReservedInstances
+                    CostWithRI        = $p.totalCostWithReservedInstances
+                    NetSavings        = $p.netSavings
+                    Currency          = $p.currency
+                    Scope             = $p.scope
+                }
+            }
+        } catch {
+            $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            if ($status -in @(403, 401)) {
+                Write-Host "  ! No permission to read reservation recommendations for subscription $($sub.Name) (needs Cost Management Reader)." -ForegroundColor DarkYellow
+            } else {
+                Write-Host "  ! Reservation recommendations unavailable for subscription $($sub.Name): $($_.Exception.Message)" -ForegroundColor DarkYellow
+            }
+        }
+    }
+} catch {
+    Write-Host "  ! Could not check reservation recommendations: $($_.Exception.Message)" -ForegroundColor DarkYellow
+}
+
+if ($reservationRows.Count -eq 0) {
+    $reservationRows = @([PSCustomObject]@{ Result = "No reservation/savings plan recommendations found (or permission unavailable - requires Cost Management Reader)" })
+}
+$reservationRows | Export-Excel -Path $outputFile -WorksheetName "ReservationRecommendations" -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
+Write-Host "  [ReservationRecommendations] $($reservationRows.Count) rows" -ForegroundColor Gray
+
 Write-Host "`n✅ Advisor export complete!" -ForegroundColor Green
 Write-Host "📁 File: $outputFile" -ForegroundColor Cyan
 Write-Host "💡 In Cloud Shell, click download icon to get the file.`n" -ForegroundColor Yellow

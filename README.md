@@ -2,7 +2,7 @@
 
 A comprehensive suite of PowerShell scripts + Python dashboard agent for **Azure Well-Architected Framework (WAF)** and **Cloud Adoption Framework (CAF)** workshop preparation.
 
-**One launcher → five assessment phases → one consolidated dashboard.**
+**One launcher → six assessment phases → one consolidated dashboard.**
 
 ```
 Launch-AzureWorkshop.ps1 → generate-dashboard.py → WAF_Dashboard.html
@@ -71,6 +71,15 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 │                     ▼                                       │
 │              05_Security/                                    │
 │              AzureSecurity.xlsx                              │
+│                                                             │
+│  Phase 6                                                    │
+│  ┌──────────────────────────────────────────────────┐       │
+│  │ Review Checklists (Azure/review-checklists)      │       │
+│  │ → Community WAF checks via Resource Graph        │       │
+│  └──────────────────┬───────────────────────────────┘       │
+│                     ▼                                       │
+│              06_Checklists/                                  │
+│              AzureChecklists.xlsx                            │
 └─────────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -84,7 +93,7 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 │  • Produces consolidated HTML dashboard                     │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
-                    06_Dashboard/
+                    07_Dashboard/
                     WAF_Dashboard.html
 ```
 
@@ -98,6 +107,7 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 | `Invoke-AzureMetrics-CloudShell.ps1` | Right-sizing via Azure Monitor metrics | ~3-10 min |
 | `Invoke-AzureGovernanceViz-CloudShell.ps1` | Governance HTML (AzGovViz-style) | ~2 min |
 | `Invoke-AzureSecurity-CloudShell.ps1` | Defender for Cloud CSPM/MCSB, Defender XDR, and Endpoint export | ~1-3 min |
+| `Invoke-AzureChecklists-CloudShell.ps1` | Community WAF checks from [Azure/review-checklists](https://github.com/Azure/review-checklists) (vendored locally, no network needed) via Resource Graph | ~2-5 min |
 | `generate-dashboard.py` | Consolidated dashboard with scoring + action items | ~5 sec |
 
 ## Output Structure
@@ -115,7 +125,9 @@ python3 generate-dashboard.py ~/AzureWorkshop_<timestamp>
 │   └── AzureGovernance.xlsx         # MG hierarchy, policies, RBAC, Defender
 ├── 05_Security/
 │   └── AzureSecurity.xlsx           # CSPM, MCSB, plans, incidents, alerts, Endpoint, source status
-└── 06_Dashboard/
+├── 06_Checklists/
+│   └── AzureChecklists.xlsx         # Non-compliant findings from Azure/review-checklists ARG checks
+└── 07_Dashboard/
     └── WAF_Dashboard.html           # ★ Final consolidated dashboard
 ```
 
@@ -162,6 +174,8 @@ Each script can also be run standalone:
 ./Invoke-AzureSecurity-CloudShell.ps1 -SkipGraphSecurity     # Keep Cloud + Endpoint; skip Graph sign-in
 ./Invoke-AzureSecurity-CloudShell.ps1 -MaxEndpointRecords 10000
 ./Invoke-AzureSecurity-CloudShell.ps1 -SkipDefenderPortal  # Defender for Cloud posture only
+./Invoke-AzureChecklists-CloudShell.ps1     # Runs independently; scans all community checklists
+./Invoke-AzureChecklists-CloudShell.ps1 -Services keyvault,aks,storage  # Scope to specific services
 ```
 
 ### Security Data Sources
@@ -174,6 +188,15 @@ Each script can also be run standalone:
 
 Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` means the source was queried successfully and returned no records; `Forbidden`, `Unavailable`, `Partial`, or `Skipped` means the assessment does not have complete visibility for that source. Defender for Endpoint datasets default to 5,000 records per sheet; reaching `-MaxEndpointRecords` is reported as `Partial` so the workbook closes predictably.
 
+### Checklist Data Source
+
+`Invoke-AzureChecklists-CloudShell.ps1` runs each community check's embedded Azure Resource Graph query against the current subscription(s), using the checklist JSON files vendored locally under [`checklists/`](checklists/) — sourced from [Azure/review-checklists](https://github.com/Azure/review-checklists). This is **not an official Microsoft dataset**; it's an open-source, community-curated set of WAF checks per Azure service (Key Vault, AKS, Storage, etc.), each tagged with a Reliability/Security/Cost/Operations/Performance pillar.
+
+- No GitHub/network access is required at run time — only Azure Resource Graph, same as every other script in this toolkit. This keeps it safe to run from a locked-down Cloud Shell/launcher session.
+- Run `Update-ReviewChecklists.ps1` manually (from a machine with internet access) whenever you want to refresh `checklists/` with the latest upstream files, then commit the folder.
+- Findings only **add action items** to the dashboard (tagged with their source and a link back to the check's documentation) — they do **not** change the Advisor Score pillar math described below.
+- Use `-Services` to scope the scan to specific checklist files (e.g. `-Services keyvault,aks,storage`) if a full catalog scan is too slow.
+
 ## Notes
 
 - All queries are **read-only** — no changes are made to the environment.
@@ -182,6 +205,7 @@ Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` m
 - Use `-SkipMetrics` if you're short on time during a workshop.
 - The Governance HTML can be used standalone as an AzGovViz-lite alternative.
 - Security API failures are isolated by source and do not prevent the workbook or dashboard from being generated.
+- Checklist findings from Azure/review-checklists are additive action items only and never affect pillar scores.
 
 ## License
 

@@ -172,7 +172,8 @@ class ExcelReader:
             "advisor": {},
             "metrics": {},
             "governance": {},
-            "security": {}
+            "security": {},
+            "checklists": {}
         }
         
         # Discovery
@@ -204,6 +205,12 @@ class ExcelReader:
         if path:
             data["security"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Security: {sum(len(v) for v in data['security'].values())} records across {len(data['security'])} sheets")
+
+        # Checklists (Azure/review-checklists community WAF ARG compliance scan)
+        path = ExcelReader.find_workbook(base_dir, "06_Checklists", "AzureChecklists")
+        if path:
+            data["checklists"] = ExcelReader.read_workbook(path)
+            print(f"  ✓ Checklists: {sum(len(v) for v in data['checklists'].values())} records across {len(data['checklists'])} sheets")
         
         return data
 
@@ -389,7 +396,51 @@ class InsightEngine:
         self._analyze_cost()
         self._analyze_operational_excellence()
         self._analyze_performance()
+        self._analyze_checklists()
         return self
+
+    def _analyze_checklists(self):
+        """Community WAF checks from Azure/review-checklists, run via Resource Graph.
+        Adds action items only — pillar scores above still follow the Advisor Score model.
+        Source: https://github.com/Azure/review-checklists
+        """
+        rows = self._data_rows(self.data.get("checklists", {}).get("Findings", []))
+        severity_map = {"high": "high", "medium": "medium", "low": "low"}
+        grouped = {}
+        for row in rows:
+            key = row.get("Guid") or row.get("Text")
+            if not key:
+                continue
+            bucket = grouped.setdefault(key, {
+                "pillar": row.get("WafPillar") or "Operational Excellence",
+                "severity": severity_map.get(str(row.get("Severity", "")).strip().lower(), "medium"),
+                "service": str(row.get("Service", "")),
+                "text": str(row.get("Text", "")),
+                "link": str(row.get("Link", "")),
+                "resources": []
+            })
+            resource_id = row.get("ResourceId", "")
+            if resource_id:
+                bucket["resources"].append(escape(str(resource_id)))
+
+        for bucket in grouped.values():
+            if bucket["pillar"] not in self.scores:
+                continue
+            text = escape(bucket["text"])
+            title = text if len(text) <= 90 else text[:87] + "..."
+            link_html = f' <a href="{escape(bucket["link"])}" target="_blank">Learn more</a>' if bucket["link"] else ""
+            count = len(bucket["resources"])
+            desc = (f'{text}{link_html} — {count} non-compliant resource(s). '
+                    f'Source: Azure/review-checklists community WAF checklist ({escape(bucket["service"])}).')
+            self.action_items.append({
+                "pillar": bucket["pillar"],
+                "severity": bucket["severity"],
+                "title": f'[{escape(bucket["service"])}] {title}',
+                "title_es": f'[{escape(bucket["service"])}] {title}',
+                "description": desc,
+                "description_es": desc,
+                "resources": bucket["resources"][:10]
+            })
     
     def _analyze_reliability(self):
         """Reliability score using the official Advisor Score subcategory model."""
@@ -749,6 +800,72 @@ class InsightEngine:
                 "resources": [f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)" for v in underutilized[:10]]
             })
         
+        # SQL databases that are oversized or underutilized (DTU/CPU-based)
+        sql_metrics = self._data_rows(self.data.get("metrics", {}).get("SQL_RightSizing", []))
+        sql_waste = [d for d in sql_metrics if str(d.get("Assessment", "")).startswith(("Oversized", "Underutilized"))]
+        if sql_waste:
+            keys = {str(d.get("Name", id(d))) for d in sql_waste}
+            impacted_keys |= keys
+            sources.append({
+                "name": "Oversized/underutilized SQL databases",
+                "count": len(keys),
+                "unit": "resources",
+                "affected": len(keys),
+            })
+            self.action_items.append({
+                "pillar": "Cost Optimization",
+                "severity": "medium",
+                "title": f"{len(sql_waste)} SQL databases are oversized or underutilized",
+                "title_es": f"{len(sql_waste)} bases de datos SQL están sobredimensionadas o subutilizadas",
+                "description": "These databases run well below their provisioned DTU/CPU tier over 30 days. Consider a lower SKU.",
+                "description_es": "Estas bases de datos operan muy por debajo de su nivel de DTU/CPU aprovisionado durante 30 días. Considere un SKU menor.",
+                "resources": [f"{d.get('Name', '')} ({d.get('SKU', '')} @ {d.get('AvgUsage_Pct', '?')}% {d.get('MetricType', '')})" for d in sql_waste[:10]]
+            })
+
+        # App Service Plans that are idle or underutilized
+        plan_metrics = self._data_rows(self.data.get("metrics", {}).get("AppPlan_RightSizing", []))
+        plan_waste = [p for p in plan_metrics if str(p.get("Assessment", "")).startswith(("Idle", "Underutilized"))]
+        if plan_waste:
+            keys = {str(p.get("Name", id(p))) for p in plan_waste}
+            impacted_keys |= keys
+            sources.append({
+                "name": "Idle/underutilized App Service Plans",
+                "count": len(keys),
+                "unit": "resources",
+                "affected": len(keys),
+            })
+            self.action_items.append({
+                "pillar": "Cost Optimization",
+                "severity": "medium",
+                "title": f"{len(plan_waste)} App Service Plans are idle or underutilized",
+                "title_es": f"{len(plan_waste)} planes de App Service están inactivos o subutilizados",
+                "description": "These plans run well below their provisioned CPU/memory over 30 days. Consider scaling down or consolidating apps.",
+                "description_es": "Estos planes operan muy por debajo de su CPU/memoria aprovisionada durante 30 días. Considere reducir su tamaño o consolidar aplicaciones.",
+                "resources": [f"{p.get('Name', '')} ({p.get('SKU', '')} @ {p.get('AvgCPU_Pct', '?')}% CPU)" for p in plan_waste[:10]]
+            })
+
+        # Storage accounts with zero/minimal activity
+        storage_metrics = self._data_rows(self.data.get("metrics", {}).get("Storage_Activity", []))
+        storage_waste = [s for s in storage_metrics if str(s.get("Assessment", "")).startswith(("Zero", "Minimal"))]
+        if storage_waste:
+            keys = {str(s.get("Name", id(s))) for s in storage_waste}
+            impacted_keys |= keys
+            sources.append({
+                "name": "Storage accounts with zero/minimal activity",
+                "count": len(keys),
+                "unit": "resources",
+                "affected": len(keys),
+            })
+            self.action_items.append({
+                "pillar": "Cost Optimization",
+                "severity": "low",
+                "title": f"{len(storage_waste)} Storage accounts show zero/minimal activity",
+                "title_es": f"{len(storage_waste)} cuentas de almacenamiento muestran actividad nula/mínima",
+                "description": "These storage accounts had near-zero transactions over 30 days. Review for deletion or tier downgrade (e.g. to Archive).",
+                "description_es": "Estas cuentas de almacenamiento tuvieron transacciones casi nulas durante 30 días. Considere eliminarlas o cambiarlas a un nivel más económico (p. ej. Archive).",
+                "resources": [f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgDailyTxns', '?')} txns/day)" for s in storage_waste[:10]]
+            })
+
         # Cost recommendations from Advisor
         cost_recs = self._data_rows(self.data.get("advisor", {}).get("Cost", []))
         if cost_recs:
@@ -774,6 +891,28 @@ class InsightEngine:
                 "description": desc,
                 "description_es": desc_es,
                 "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in cost_recs[:10]]
+            })
+
+        # Reservation / Savings Plan recommendations (rate optimization). Informational only -
+        # these are opportunities on already-healthy resources, so they don't affect the score,
+        # same treatment as the community checklist findings.
+        reservation_recs = [
+            r for r in self._data_rows(self.data.get("advisor", {}).get("ReservationRecommendations", []))
+            if r.get("ResourceType") or r.get("SkuName")
+        ]
+        if reservation_recs:
+            total_net_savings = sum(float(r.get("NetSavings", 0) or 0) for r in reservation_recs)
+            currency = next((r.get("Currency") for r in reservation_recs if r.get("Currency")), "USD")
+            desc = f"Buying the recommended Reserved Instances/Savings Plans could save ~{total_net_savings:,.0f} {currency}/year vs. pay-as-you-go."
+            desc_es = f"Comprar las Reservas/Planes de Ahorro recomendados podría ahorrar ~{total_net_savings:,.0f} {currency}/año frente a pago por uso."
+            self.action_items.append({
+                "pillar": "Cost Optimization",
+                "severity": "medium",
+                "title": f"{len(reservation_recs)} Reservation/Savings Plan opportunities",
+                "title_es": f"{len(reservation_recs)} oportunidades de Reservas/Planes de Ahorro",
+                "description": desc,
+                "description_es": desc_es,
+                "resources": [f"{r.get('ResourceType', '')} {r.get('SkuName', '')} x{r.get('RecommendedQty', '?')} ({r.get('Term', '')})" for r in reservation_recs[:10]]
             })
         
         if total_pool > 0:
@@ -979,6 +1118,27 @@ class DashboardGenerator:
             if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
         ])
 
+    _ICON_FILE_CACHE: dict = {}
+    _icon_instance_counter = 0
+
+    def _azure_icon(self, name: str, css_class: str = "az-icon") -> str:
+        """Inline an official Microsoft Azure architecture SVG icon (assets/azure-icons/*.svg).
+
+        Icon ids/gradient refs are namespaced per-embed since the same icon may be
+        rendered many times in one page (duplicate SVG ids are otherwise invalid HTML).
+        """
+        svg = self._ICON_FILE_CACHE.get(name)
+        if svg is None:
+            icon_path = Path(__file__).parent / "assets" / "azure-icons" / f"{name}.svg"
+            svg = icon_path.read_text(encoding="utf-8")
+            self._ICON_FILE_CACHE[name] = svg
+        DashboardGenerator._icon_instance_counter += 1
+        uid = DashboardGenerator._icon_instance_counter
+        svg = re.sub(r'id="([^"]+)"', lambda m: f'id="{m.group(1)}-{uid}"', svg)
+        svg = re.sub(r'url\(#([^)]+)\)', lambda m: f'url(#{m.group(1)}-{uid})', svg)
+        svg = re.sub(r"<svg ", f'<svg class="{css_class}" ', svg, count=1)
+        return svg
+
     def _render_security_view(self) -> str:
         """Render dedicated security posture, compliance, and operations details."""
         security = self.data.get("security", {})
@@ -1001,13 +1161,22 @@ class DashboardGenerator:
                 return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
             header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
             body = ""
-            for row in rows[:limit]:
+            for i, row in enumerate(rows):
                 cells = "".join(
                     f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
                     for key, _, _, numeric in columns
                 )
-                body += f"<tr>{cells}</tr>"
-            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>'
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f"<tr{row_attr}>{cells}</tr>"
+            more = ""
+            if len(rows) > limit:
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
+                less_text = bi("Show less", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
         recommendations = [
@@ -1169,45 +1338,873 @@ class DashboardGenerator:
             </div>
         </div>"""
 
-    def _render_governance_overview(self) -> str:
-        """Surface GovViz data (RBAC, policy, locks, management groups) that isn't reflected in pillar scores."""
+    def _render_governance_view(self) -> str:
+        """Render management-group hierarchy, policy/RBAC, and scope details natively (no iframe to a separate HTML file)."""
         gov = self.data.get("governance", {})
+
+        def real_rows(sheet_name):
+            return [
+                row for row in gov.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def render_table(rows, columns, empty_en, empty_es, limit=15):
+            if not rows:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+            body = ""
+            for i, row in enumerate(rows):
+                cells = "".join(
+                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    for key, _, _, numeric in columns
+                )
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f"<tr{row_attr}>{cells}</tr>"
+            more = ""
+            if len(rows) > limit:
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
+                less_text = bi("Show less", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
+
+        mg_rows = real_rows("MgmtGroups")
+        subs_rows = real_rows("Subscriptions")
+        policy_assignments = real_rows("PolicyAssignments")
+        custom_policies = real_rows("CustomPolicies")
+        policy_compliance = real_rows("PolicyCompliance")
+        role_assignments = real_rows("RoleAssignments")
+        custom_roles = real_rows("CustomRoles")
+        defender_plans = real_rows("DefenderPlans")
+        secure_scores = real_rows("SecureScores")
+        resource_summary = real_rows("ResourceSummary")
+        orphaned = real_rows("OrphanedResources")
+        vnets = real_rows("VNets")
+        locks = real_rows("Locks")
+
+        non_compliant_count = sum(int(r.get("NonCompliantCount", 0) or 0) for r in policy_compliance) or len(policy_compliance)
         stats = [
-            (bi("Management Groups", "Grupos de Administraci\u00f3n"), self._count_real(gov.get("MgmtGroups", []))),
-            (bi("Policy Assignments", "Asignaciones de Pol\u00edticas"), self._count_real(gov.get("PolicyAssignments", []))),
-            (bi("Custom Policies", "Pol\u00edticas Personalizadas"), self._count_real(gov.get("CustomPolicies", []))),
-            (bi("Role Assignments", "Asignaciones de Roles"), self._count_real(gov.get("RoleAssignments", []))),
-            (bi("Custom Roles", "Roles Personalizados"), self._count_real(gov.get("CustomRoles", []))),
-            (bi("Resource Locks", "Bloqueos de Recursos"), self._count_real(gov.get("Locks", []))),
+            (len(mg_rows), bi("Management Groups", "Grupos de Administraci\u00f3n")),
+            (len(subs_rows), bi("Subscriptions", "Suscripciones")),
+            (len(policy_assignments), bi("Policy Assignments", "Asignaciones de Pol\u00edticas")),
+            (non_compliant_count, bi("Non-Compliant Resources", "Recursos No Conformes")),
+            (len(role_assignments), bi("Role Assignments", "Asignaciones de Roles")),
+            (len(locks), bi("Resource Locks", "Bloqueos de Recursos")),
+            (len(orphaned), bi("Orphaned Resources", "Recursos Hu\u00e9rfanos")),
         ]
-        stat_boxes = "".join(
-            f'<div class="stat-box"><div class="value">{count:,}</div><div class="label">{label}</div></div>'
-            for label, count in stats
+        stat_html = "".join(
+            f'<div class="security-stat"><div class="value security-accent">{count:,}</div><div class="label">{label}</div></div>'
+            for count, label in stats
         )
 
-        report_html = ""
-        if self.base_dir:
-            report_path = os.path.join(self.base_dir, "04_Governance", "AzureGovernance.html")
-            if os.path.exists(report_path):
-                link_text = bi(
-                    "Open full Governance Visualizer report (Hierarchy Map, Tenant Summary, Scope Insights) in a new tab \u2197",
-                    "Abrir el informe completo del Visualizador de Gobernanza (Mapa de Jerarqu\u00eda, Resumen del Tenant, Perspectivas de Alcance) en una pesta\u00f1a nueva \u2197"
-                )
-                report_html = f"""<div class="governance-embed">
-            <div class="governance-embed-toolbar">
-                <a href="../04_Governance/AzureGovernance.html" target="_blank">{link_text}</a>
-            </div>
-            <iframe id="governanceVisualizerFrame" src="../04_Governance/AzureGovernance.html" loading="lazy" onload="initializeGovernanceFrame(this)"></iframe>
-        </div>"""
-        if not report_html:
-            note = bi(
-                "Governance Visualizer HTML report not found (04_Governance/AzureGovernance.html) — run Invoke-AzureGovernanceViz-CloudShell.ps1 to generate it.",
-                "No se encontr\u00f3 el informe HTML del Visualizador de Gobernanza (04_Governance/AzureGovernance.html); ejecute Invoke-AzureGovernanceViz-CloudShell.ps1 para generarlo."
-            )
-            report_html = f'<p class="breakdown-note">{note}</p>'
+        def scope_matches(scope, mg_id):
+            return bool(mg_id) and f"/managementgroups/{mg_id}".lower() in str(scope or "").lower()
 
-        return f"""<div class="stats-row">{stat_boxes}</div>
-        {report_html}"""
+        def mg_level(m):
+            try:
+                return int(m.get("Level"))
+            except (TypeError, ValueError):
+                return None
+
+        has_hierarchy = bool(mg_rows) and any(mg_level(m) is not None for m in mg_rows)
+
+        def build_tree(mg, depth_guard=0):
+            if depth_guard > 12:
+                return ""
+            mg_id = str(mg.get("Id", ""))
+            level = mg_level(mg)
+            level = level if level is not None else 0
+            path = str(mg.get("Path", "") or "")
+            policy_count = len([p for p in policy_assignments if scope_matches(p.get("scope_"), mg_id)])
+            role_count = len([r for r in role_assignments if scope_matches(r.get("scope_"), mg_id)])
+            sub_count = int(mg.get("Subscriptions", 0) or 0)
+            children = [m for m in mg_rows if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")]
+            children_html = "".join(build_tree(child, depth_guard + 1) for child in children)
+            sub_html = ""
+            if sub_count:
+                sub_names = escape(str(mg.get("SubNames", "") or ""))
+                sub_html = f'<li class="mg-sub-leaf" title="{sub_names}">{self._azure_icon("subscriptions")} {sub_count} {bi("subscriptions", "suscripciones")}</li>'
+            return f"""<li>
+                <details open class="mg-node-details">
+                    <summary class="mg-node">
+                        <span class="mg-name">{self._azure_icon("management-groups")} {escape(str(mg.get('DisplayName', mg_id)))}</span>
+                        <span class="mg-badge mg-badge-policy" title="{policy_count} policy assignments">{self._azure_icon("policy")} {policy_count}</span>
+                        <span class="mg-badge mg-badge-rbac" title="{role_count} role assignments">{role_count}</span>
+                    </summary>
+                    <ul>{children_html}{sub_html}</ul>
+                </details>
+            </li>"""
+
+        if has_hierarchy:
+            roots = [m for m in mg_rows if mg_level(m) == 0]
+            hierarchy_html = f'<ul class="mg-tree">{"".join(build_tree(r) for r in roots)}</ul>' if roots else ""
+        else:
+            hierarchy_html = ""
+        if not hierarchy_html:
+            hierarchy_html = render_table(mg_rows, [
+                ("displayName", "Name", "Nombre", False),
+                ("name", "Id", "Id", False),
+                ("parent", "Parent", "Padre", False),
+            ], "No management group data found.", "No se encontraron datos de grupos de administraci\u00f3n.")
+
+        scope_items = []
+        if has_hierarchy:
+            ordered_mgs = sorted(mg_rows, key=lambda m: (mg_level(m) or 0, str(m.get("DisplayName", ""))))
+            for mg in ordered_mgs[:40]:
+                mg_id = str(mg.get("Id", ""))
+                mg_policies = [p for p in policy_assignments if scope_matches(p.get("scope_"), mg_id)]
+                mg_roles = [r for r in role_assignments if scope_matches(r.get("scope_"), mg_id)]
+                indent = "\u2014" * (mg_level(mg) or 0)
+                if mg_policies:
+                    policy_rows = "".join(
+                        f"<tr><td>{escape(str(p.get('displayName', '')))}</td><td>{escape(str(p.get('enforcement', '')))}</td><td>{escape(str(p.get('identity_', '')))}</td></tr>"
+                        for p in mg_policies[:10]
+                    )
+                    policy_table = f"""<table class="mini-table"><thead><tr><th>{bi('Policy', 'Pol\u00edtica')}</th><th>{bi('Enforcement', 'Aplicaci\u00f3n')}</th><th>{bi('Identity', 'Identidad')}</th></tr></thead><tbody>{policy_rows}</tbody></table>"""
+                else:
+                    policy_table = f'<p class="empty-state">{bi("No policy assignments at this scope.", "Sin asignaciones de pol\u00edticas en este alcance.")}</p>'
+                scope_items.append(f"""<details class="scope-detail">
+                    <summary>{indent} <strong>{escape(str(mg.get('DisplayName', mg_id)))}</strong> <span class="scope-id">({escape(mg_id)})</span>
+                        <span class="mg-badge mg-badge-policy">{len(mg_policies)} {bi('policies', 'pol.')}</span>
+                        <span class="mg-badge mg-badge-rbac">{len(mg_roles)} {bi('roles', 'roles')}</span>
+                        <span class="mg-badge mg-badge-subs">{mg.get('Subscriptions', 0)} {bi('subs', 'subs')}</span>
+                    </summary>
+                    <p><strong>{bi('Path', 'Ruta')}:</strong> {escape(str(mg.get('Path', '')))}</p>
+                    {policy_table}
+                </details>""")
+        scope_insights_html = "".join(scope_items) if scope_items else f'<p class="empty-state">{bi("Scope insights require the Management Group hierarchy (Level/Path fields).", "Los detalles de alcance requieren la jerarqu\u00eda de Grupos de Administraci\u00f3n (campos Level/Path).")}</p>'
+
+        policy_assignments_table = render_table(policy_assignments, [
+            ("displayName", "Name", "Nombre", False),
+            ("enforcement", "Enforcement", "Aplicaci\u00f3n", False),
+            ("identity_", "Identity", "Identidad", False),
+            ("scope_", "Scope", "Alcance", False),
+        ], "No policy assignments found.", "No se encontraron asignaciones de pol\u00edticas.")
+        custom_policies_table = render_table(custom_policies, [
+            ("displayName", "Name", "Nombre", False),
+            ("effect", "Effect", "Efecto", False),
+            ("category", "Category", "Categor\u00eda", False),
+        ], "No custom policy definitions found.", "No se encontraron definiciones de pol\u00edticas personalizadas.")
+        policy_compliance_table = render_table(policy_compliance, [
+            ("policyAssignment", "Policy Assignment", "Asignaci\u00f3n de Pol\u00edtica", False),
+            ("complianceState", "State", "Estado", False),
+            ("NonCompliantCount", "Non-Compliant", "No Conformes", True),
+        ], "No non-compliant resources found.", "No se encontraron recursos no conformes.")
+        role_assignments_table = render_table(role_assignments, [
+            ("principalType", "Principal Type", "Tipo de Principal", False),
+            ("roleDefId", "Role", "Rol", False),
+            ("scope_", "Scope", "Alcance", False),
+        ], "No role assignments found.", "No se encontraron asignaciones de roles.")
+        custom_roles_table = render_table(custom_roles, [
+            ("roleName", "Role Name", "Nombre del Rol", False),
+            ("description_", "Description", "Descripci\u00f3n", False),
+        ], "No custom role definitions found.", "No se encontraron definiciones de roles personalizados.")
+        defender_plans_table = render_table(defender_plans, [
+            ("name", "Plan", "Plan", False),
+            ("tier", "Tier", "Nivel", False),
+            ("subPlan", "Sub-plan", "Sub-plan", False),
+        ], "No Defender for Cloud plans found.", "No se encontraron planes de Defender for Cloud.")
+        secure_scores_table = render_table(secure_scores, [
+            ("subscriptionId", "Subscription", "Suscripci\u00f3n", False),
+            ("pct", "Score %", "Puntaje %", True),
+        ], "No Secure Score data found.", "No se encontraron datos de Secure Score.")
+        resource_summary_table = render_table(resource_summary, [
+            ("type", "Resource Type", "Tipo de Recurso", False),
+            ("location", "Location", "Ubicaci\u00f3n", False),
+            ("Count", "Count", "Cantidad", True),
+        ], "No resource summary found.", "No se encontr\u00f3 resumen de recursos.")
+        orphaned_table = render_table(orphaned, [
+            ("Type", "Type", "Tipo", False),
+            ("Name", "Name", "Nombre", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("Detail", "Detail", "Detalle", False),
+        ], "No orphaned resources found.", "No se encontraron recursos hu\u00e9rfanos.")
+        vnets_table = render_table(vnets, [
+            ("name", "VNet", "VNet", False),
+            ("addressSpace", "Address Space", "Espacio de Direcciones", False),
+            ("subnets", "Subnets", "Subredes", True),
+            ("peerings", "Peerings", "Emparejamientos", True),
+        ], "No virtual networks found.", "No se encontraron redes virtuales.")
+        locks_table = render_table(locks, [
+            ("name", "Name", "Nombre", False),
+            ("lockLevel", "Level", "Nivel", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "No resource locks found.", "No se encontraron bloqueos de recursos.")
+
+        return f"""
+        <div class="security-summary-band">
+            <div>
+                <div class="security-eyebrow">GOVERNANCE VISUALIZER</div>
+                <h2>{bi('Management hierarchy, policy, and RBAC', 'Jerarqu\u00eda de administraci\u00f3n, pol\u00edticas y RBAC')}</h2>
+                <p>{bi('Management group tree, policy/RBAC assignments, and per-scope insights in one native view.', 'Árbol de grupos de administraci\u00f3n, asignaciones de pol\u00edticas/RBAC y detalles por alcance en una vista nativa.')}</p>
+            </div>
+        </div>
+        <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title security-title">{bi('Hierarchy map', 'Mapa de jerarqu\u00eda')}</div>
+            {hierarchy_html}
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Policy assignments', 'Asignaciones de pol\u00edticas')}</h3>{policy_assignments_table}</div>
+            <div class="security-panel"><h3>{bi('Custom policy definitions', 'Definiciones de pol\u00edticas personalizadas')}</h3>{custom_policies_table}</div>
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Non-compliant resources', 'Recursos no conformes')}</h3>{policy_compliance_table}</div>
+            <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos')}</h3>{locks_table}</div>
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Role assignments', 'Asignaciones de roles')}</h3>{role_assignments_table}</div>
+            <div class="security-panel"><h3>{bi('Custom role definitions', 'Definiciones de roles personalizados')}</h3>{custom_roles_table}</div>
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Defender for Cloud plans', 'Planes de Defender for Cloud')}</h3>{defender_plans_table}</div>
+            <div class="security-panel"><h3>{bi('Secure Score by subscription', 'Secure Score por suscripci\u00f3n')}</h3>{secure_scores_table}</div>
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Resources by type & location', 'Recursos por tipo y ubicaci\u00f3n')}</h3>{resource_summary_table}</div>
+            <div class="security-panel"><h3>{bi('Orphaned resources (cost savings)', 'Recursos hu\u00e9rfanos (ahorro de costos)')}</h3>{orphaned_table}</div>
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Virtual networks', 'Redes virtuales')}</div>
+            {vnets_table}
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Scope insights', 'Detalles por alcance')}</div>
+            <div class="scope-insights">{scope_insights_html}</div>
+        </div>"""
+
+    def _render_cost_view(self) -> str:
+        """Render cost optimization insights: right-sizing, idle/orphaned assets, Advisor and reservation savings."""
+        advisor = self.data.get("advisor", {})
+        metrics = self.data.get("metrics", {})
+        governance = self.data.get("governance", {})
+        discovery = self.data.get("discovery", {})
+
+        def real_rows(source, sheet_name):
+            return [
+                row for row in source.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def as_float(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def render_table(rows, columns, empty_en, empty_es, limit=15):
+            if not rows:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+            body = ""
+            for i, row in enumerate(rows):
+                cells = "".join(
+                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    for key, _, _, numeric in columns
+                )
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f"<tr{row_attr}>{cells}</tr>"
+            more = ""
+            if len(rows) > limit:
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
+                less_text = bi("Show less", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
+
+        def waste_priority(assessment):
+            label = str(assessment or "").lower()
+            if "idle" in label or "zero" in label:
+                return 0
+            if "underutil" in label or "oversiz" in label or "minimal" in label:
+                return 1
+            if "no data" in label:
+                return 3
+            return 2
+
+        def assessment_color(assessment):
+            label = str(assessment or "").lower()
+            if "idle" in label or "zero" in label:
+                return "var(--cp-danger)"
+            if "underutil" in label or "oversiz" in label or "minimal" in label:
+                return "var(--cp-warning)"
+            if "no data" in label:
+                return "var(--cp-text-muted)"
+            return "var(--cp-success)"
+
+        def render_distribution(rows):
+            if not rows:
+                return ""
+            counts = {}
+            for row in rows:
+                label = str(row.get("Assessment", "Unknown")) or "Unknown"
+                counts[label] = counts.get(label, 0) + 1
+            total = len(rows)
+            bars = "".join(
+                f"""<div class="cost-dist-row">
+                    <span class="cost-dist-label">{escape(label)}</span>
+                    <div class="cost-dist-track"><div class="cost-dist-fill" style="width:{round(count / total * 100)}%; background:{assessment_color(label)};"></div></div>
+                    <span class="cost-dist-count">{count}</span>
+                </div>"""
+                for label, count in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+            )
+            return f'<div class="cost-dist">{bars}</div>'
+
+        cost_recs = real_rows(advisor, "Cost")
+        reservation_recs = [r for r in real_rows(advisor, "ReservationRecommendations") if r.get("ResourceType") or r.get("SkuName")]
+        vm_rightsizing = sorted(real_rows(metrics, "VM_RightSizing"), key=lambda r: waste_priority(r.get("Assessment")))
+        sql_rightsizing = sorted(real_rows(metrics, "SQL_RightSizing"), key=lambda r: waste_priority(r.get("Assessment")))
+        plan_rightsizing = sorted(real_rows(metrics, "AppPlan_RightSizing"), key=lambda r: waste_priority(r.get("Assessment")))
+        storage_activity = sorted(real_rows(metrics, "Storage_Activity"), key=lambda r: waste_priority(r.get("Assessment")))
+        orphaned = real_rows(governance, "OrphanedResources")
+        dealloc_vms = real_rows(discovery, "DeallocatedVMs")
+        unattached_disks = real_rows(discovery, "UnattachedDisks")
+
+        vm_waste = [r for r in vm_rightsizing if waste_priority(r.get("Assessment")) <= 1]
+        sql_waste = [r for r in sql_rightsizing if waste_priority(r.get("Assessment")) <= 1]
+        plan_waste = [r for r in plan_rightsizing if waste_priority(r.get("Assessment")) <= 1]
+        storage_waste = [r for r in storage_activity if waste_priority(r.get("Assessment")) <= 1]
+
+        advisor_savings = sum(as_float(r.get("annualSavings")) for r in cost_recs)
+        reservation_savings = sum(as_float(r.get("NetSavings")) for r in reservation_recs)
+        total_savings = advisor_savings + reservation_savings
+        currency = next((r.get("Currency") for r in reservation_recs if r.get("Currency")), None) \
+            or next((r.get("savingsCurrency") for r in cost_recs if r.get("savingsCurrency")), "USD")
+        savings_text = f"${total_savings:,.0f}" if total_savings > 0 else "N/A"
+
+        orphaned_total = len(orphaned) + len(dealloc_vms) + len(unattached_disks)
+
+        stats = [
+            (savings_text, bi("Est. Annual Savings", "Ahorro Anual Est."), "security-accent"),
+            (len(cost_recs), bi("Advisor Cost Recs", "Recom. de Costos"), ""),
+            (len(reservation_recs), bi("Reservation Opportunities", "Oportunidades de Reserva"), ""),
+            (len(vm_waste), bi("Idle/Underutilized VMs", "VMs Inactivas/Subutilizadas"), "security-warning"),
+            (len(sql_waste), bi("SQL DBs to Rightsize", "BD SQL para Ajustar"), "security-warning"),
+            (len(plan_waste), bi("App Plans to Rightsize", "Planes App para Ajustar"), "security-warning"),
+            (len(storage_waste), bi("Low-activity Storage", "Almacenamiento de Baja Actividad"), "security-warning"),
+            (orphaned_total, bi("Orphaned/Unused Resources", "Recursos Hu\u00e9rfanos/No Usados"), "security-danger"),
+        ]
+        stat_html = "".join(
+            f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
+            for value, label, color_class in stats
+        )
+
+        for r in cost_recs:
+            savings = as_float(r.get("annualSavings"))
+            r["AnnualSavingsDisplay"] = f"{savings:,.0f} {r.get('savingsCurrency', '') or ''}".strip() if savings else ""
+        for r in reservation_recs:
+            savings = as_float(r.get("NetSavings"))
+            r["NetSavingsDisplay"] = f"{savings:,.0f} {r.get('Currency', '') or ''}".strip() if savings else ""
+
+        cost_recs_table = render_table(cost_recs, [
+            ("impact", "Impact", "Impacto", False),
+            ("problem", "Problem", "Problema", False),
+            ("solution", "Solution", "Soluci\u00f3n", False),
+            ("AnnualSavingsDisplay", "Annual Savings", "Ahorro Anual", True),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "No Advisor cost recommendations found.", "No se encontraron recomendaciones de costos de Advisor.")
+        reservation_table = render_table(reservation_recs, [
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
+            ("ResourceType", "Resource Type", "Tipo de Recurso", False),
+            ("SkuName", "SKU", "SKU", False),
+            ("Term", "Term", "Plazo", False),
+            ("RecommendedQty", "Qty", "Cant.", True),
+            ("NetSavingsDisplay", "Net Savings/yr", "Ahorro Neto/a\u00f1o", True),
+        ], "No reservation/savings plan opportunities found.", "No se encontraron oportunidades de reservas/planes de ahorro.")
+        vm_table = render_table(vm_rightsizing, [
+            ("Name", "VM", "VM", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("VMSize", "Size", "Tama\u00f1o", False),
+            ("AvgCPU_Pct", "Avg CPU %", "CPU Prom. %", True),
+            ("MaxCPU_Pct", "Max CPU %", "CPU M\u00e1x. %", True),
+            ("Assessment", "Assessment", "Evaluaci\u00f3n", False),
+        ], "No VM right-sizing data found.", "No se encontraron datos de ajuste de tama\u00f1o de VMs.")
+        sql_table = render_table(sql_rightsizing, [
+            ("Name", "Database", "Base de Datos", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("SKU", "SKU", "SKU", False),
+            ("MetricType", "Metric", "M\u00e9trica", False),
+            ("AvgUsage_Pct", "Avg Usage %", "Uso Prom. %", True),
+            ("Assessment", "Assessment", "Evaluaci\u00f3n", False),
+        ], "No SQL right-sizing data found.", "No se encontraron datos de ajuste de tama\u00f1o de SQL.")
+        plan_table = render_table(plan_rightsizing, [
+            ("Name", "App Plan", "Plan de App", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("SKU", "SKU", "SKU", False),
+            ("Workers", "Workers", "Workers", True),
+            ("AvgCPU_Pct", "Avg CPU %", "CPU Prom. %", True),
+            ("Assessment", "Assessment", "Evaluaci\u00f3n", False),
+        ], "No App Service Plan right-sizing data found.", "No se encontraron datos de ajuste de Planes de App Service.")
+        storage_table = render_table(storage_activity, [
+            ("Name", "Storage Account", "Cuenta de Almacenamiento", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("SKU", "SKU", "SKU", False),
+            ("AvgDailyTxns", "Avg Daily Txns", "Trans. Diarias Prom.", True),
+            ("Assessment", "Assessment", "Evaluaci\u00f3n", False),
+        ], "No storage activity data found.", "No se encontraron datos de actividad de almacenamiento.")
+        orphaned_table = render_table(orphaned, [
+            ("Type", "Type", "Tipo", False),
+            ("Name", "Name", "Nombre", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("Detail", "Detail", "Detalle", False),
+        ], "No orphaned resources found.", "No se encontraron recursos hu\u00e9rfanos.")
+        dealloc_table = render_table(dealloc_vms, [
+            ("name", "VM", "VM", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("vmSize", "Size", "Tama\u00f1o", False),
+            ("location", "Location", "Ubicaci\u00f3n", False),
+        ], "No deallocated VMs found.", "No se encontraron VMs desasignadas.")
+        unattached_disks_table = render_table(unattached_disks, [
+            ("name", "Disk", "Disco", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("diskSizeGB", "Size (GB)", "Tama\u00f1o (GB)", True),
+            ("skuName", "SKU", "SKU", False),
+        ], "No unattached disks found.", "No se encontraron discos no adjuntos.")
+
+        return f"""
+        <div class="security-summary-band">
+            <div>
+                <div class="security-eyebrow" style="color: var(--cp-success);">COST OPTIMIZATION</div>
+                <h2>{bi('Cost optimization opportunities', 'Oportunidades de optimizaci\u00f3n de costos')}</h2>
+                <p>{bi('Right-sizing, idle/orphaned assets, Advisor cost recommendations, and reservation coverage in one view.', 'Ajuste de tama\u00f1o, activos inactivos/hu\u00e9rfanos, recomendaciones de costos de Advisor y cobertura de reservas en una sola vista.')}</p>
+            </div>
+            <div class="security-score-mark" style="color: var(--cp-success);">{savings_text}</div>
+        </div>
+        <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o')}</div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales')}</h3>{render_distribution(vm_rightsizing)}{vm_table}</div>
+                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL')}</h3>{render_distribution(sql_rightsizing)}{sql_table}</div>
+            </div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('App Service Plans', 'Planes de App Service')}</h3>{render_distribution(plan_rightsizing)}{plan_table}</div>
+                <div class="security-panel"><h3>{bi('Storage Accounts', 'Cuentas de Almacenamiento')}</h3>{render_distribution(storage_activity)}{storage_table}</div>
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Idle and orphaned resources', 'Recursos inactivos y hu\u00e9rfanos')}</div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Deallocated VMs', 'VMs Desasignadas')}</h3>{dealloc_table}</div>
+                <div class="security-panel"><h3>{bi('Unattached Managed Disks', 'Discos Administrados No Adjuntos')}</h3>{unattached_disks_table}</div>
+            </div>
+            <div class="security-panel">
+                <h3>{bi('Orphaned resources (all types)', 'Recursos hu\u00e9rfanos (todos los tipos)')}</h3>
+                {orphaned_table}
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Advisor cost recommendations', 'Recomendaciones de costos de Advisor')}</div>
+            {cost_recs_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Reservation and Savings Plan opportunities', 'Oportunidades de Reservas y Planes de Ahorro')}</div>
+            {reservation_table}
+        </div>"""
+
+    def _render_actions_for_pillar(self, pillar: str) -> str:
+        """Render the action-item cards for a single pillar (used by the dedicated pillar tabs)."""
+        items = [a for a in self.engine.action_items if a["pillar"] == pillar]
+        if not items:
+            return f'<p class="empty-state">{bi("No action items for this pillar.", "Sin elementos de acci\u00f3n para este pilar.")}</p>'
+        html = ""
+        for i, action in enumerate(items, 1):
+            color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "var(--cp-text-muted)")
+            resources_html = ""
+            if action.get("resources"):
+                resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
+            severity_badge = bi(action['severity'].upper(), SEVERITY_ES.get(action['severity'], action['severity'].upper()))
+            title_text = bi(action['title'], action.get('title_es', action['title']))
+            desc_text = bi(action['description'], action.get('description_es', action['description']))
+            html += f"""
+            <div class="action-item" style="border-left: 4px solid {color};">
+                <div class="action-header">
+                    <span class="action-num">#{i}</span>
+                    <span class="severity-badge" style="background:{color};">{severity_badge}</span>
+                    <span class="action-title">{title_text}</span>
+                </div>
+                <p class="action-desc">{desc_text}</p>
+                {resources_html}
+            </div>"""
+        return html
+
+    def _render_subcategory_table(self, pillar: str) -> str:
+        """Render the subcategory weight/health breakdown table for a single pillar (used by the dedicated pillar tabs)."""
+        rows = self.engine.breakdowns.get(pillar, {}).get("rows", [])
+        if not rows:
+            return f'<p class="empty-state">{bi("Score breakdown unavailable.", "Desglose de puntaje no disponible.")}</p>'
+        rows_html = "".join(
+            f"<tr><td>{bi(r['subcategory'], SUBCATEGORY_ES.get(r['subcategory'], r['subcategory']))}</td><td class='num'>{r['weight']}</td>"
+            f"<td class='num'>{r['healthy']}/{r['total']}</td><td class='num'>{r['pct']}%</td></tr>"
+            for r in rows
+        )
+        return f"""<div class="security-table-wrap"><table>
+            <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda')}</th><th>{bi('Weight', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total')}</th><th>{bi('Score', 'Puntaje')}</th></tr></thead>
+            <tbody>{rows_html}</tbody>
+        </table></div>"""
+
+    def _render_reliability_view(self) -> str:
+        """Render reliability posture: Availability Zones, backup coverage, DDoS protection, and Advisor HA recommendations."""
+        discovery = self.data.get("discovery", {})
+        governance = self.data.get("governance", {})
+        advisor = self.data.get("advisor", {})
+
+        def real_rows(source, sheet_name):
+            return [
+                row for row in source.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def render_table(rows, columns, empty_en, empty_es, limit=15):
+            if not rows:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+            body = ""
+            for i, row in enumerate(rows):
+                cells = "".join(
+                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    for key, _, _, numeric in columns
+                )
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f"<tr{row_attr}>{cells}</tr>"
+            more = ""
+            if len(rows) > limit:
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
+                less_text = bi("Show less", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
+
+        def ddos_enabled(v):
+            return str(v.get("ddosProtection", v.get("ddos", ""))).lower() not in ("false", "", "none")
+
+        vms = real_rows(discovery, "VMs")
+        vms_no_zone = [v for v in vms if not v.get("zone") and not v.get("availabilityZone")]
+        backups = real_rows(discovery, "BackupVaults")
+        vnets = real_rows(discovery, "VNets") or real_rows(governance, "VNets")
+        vnets_no_ddos = [v for v in vnets if not ddos_enabled(v)]
+        reliability_recs = sorted(
+            real_rows(advisor, "Reliability"),
+            key=lambda r: {"high": 0, "medium": 1, "low": 2}.get(str(r.get("impact", "")).lower(), 3)
+        )
+        high_impact = [r for r in reliability_recs if str(r.get("impact", "")).lower() == "high"]
+
+        score = self.engine.scores.get("Reliability", 0)
+        stats = [
+            (f"{score}/100", bi("Reliability Score", "Puntaje de Confiabilidad"), "security-accent"),
+            (len(vms_no_zone), bi("VMs without Availability Zone", "VMs sin Zona de Disponibilidad"), "security-warning" if vms_no_zone else ""),
+            (len(backups), bi("Backup Vaults Found", "Vaults de Backup Encontrados"), "" if backups else "security-danger"),
+            (len(vnets_no_ddos), bi("VNets without DDoS Protection", "VNets sin Protecci\u00f3n DDoS"), "security-warning" if vnets_no_ddos else ""),
+            (len(reliability_recs), bi("Advisor Reliability Recs", "Recom. de Confiabilidad"), ""),
+            (len(high_impact), bi("High-Impact Recommendations", "Recomendaciones de Alto Impacto"), "security-danger" if high_impact else ""),
+        ]
+        stat_html = "".join(
+            f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
+            for value, label, color_class in stats
+        )
+
+        vms_table = render_table(vms_no_zone, [
+            ("name", "VM", "VM", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("location", "Location", "Ubicaci\u00f3n", False),
+            ("vmSize", "Size", "Tama\u00f1o", False),
+            ("powerState", "Power State", "Estado", False),
+        ], "All VMs are deployed across Availability Zones.", "Todas las VMs est\u00e1n desplegadas en Zonas de Disponibilidad.")
+        backups_table = render_table(backups, [
+            ("name", "Backup Vault", "Vault de Backup", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("location", "Location", "Ubicaci\u00f3n", False),
+        ], "No Backup/Recovery Services vaults found.", "No se encontraron vaults de Backup/Recovery Services.")
+        vnets_table = render_table(vnets_no_ddos, [
+            ("name", "VNet", "VNet", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("addressSpace", "Address Space", "Espacio de Direcciones", False),
+        ], "All VNets have DDoS Protection enabled.", "Todas las VNets tienen Protecci\u00f3n DDoS habilitada.")
+        recs_table = render_table(reliability_recs, [
+            ("impact", "Impact", "Impacto", False),
+            ("impactedResource", "Resource", "Recurso", False),
+            ("problem", "Problem", "Problema", False),
+            ("solution", "Solution", "Soluci\u00f3n", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "No Advisor reliability recommendations found.", "No se encontraron recomendaciones de confiabilidad de Advisor.")
+
+        return f"""
+        <div class="security-summary-band">
+            <div>
+                <div class="security-eyebrow" style="color: var(--cp-link);">RELIABILITY</div>
+                <h2>{bi('High availability and disaster recovery', 'Alta disponibilidad y recuperaci\u00f3n ante desastres')}</h2>
+                <p>{bi('Availability Zones, backup coverage, DDoS protection, and Advisor high-availability recommendations in one view.', 'Zonas de Disponibilidad, cobertura de backup, protecci\u00f3n DDoS y recomendaciones de alta disponibilidad de Advisor en una sola vista.')}</p>
+            </div>
+            <div class="security-score-mark" style="color: var(--cp-link);">{score}/100</div>
+        </div>
+        <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('VMs without Availability Zones', 'VMs sin Zonas de Disponibilidad')}</div>
+            {vms_table}
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Backup vault coverage', 'Cobertura de vaults de backup')}</h3>{backups_table}</div>
+            <div class="security-panel"><h3>{bi('VNets without DDoS Protection', 'VNets sin Protecci\u00f3n DDoS')}</h3>{vnets_table}</div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor')}</div>
+            {recs_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Score breakdown', 'Desglose de puntaje')}</div>
+            {self._render_subcategory_table("Reliability")}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Action items', 'Elementos de acci\u00f3n')}</div>
+            {self._render_actions_for_pillar("Reliability")}
+        </div>"""
+
+    def _render_performance_view(self) -> str:
+        """Render performance efficiency: VM/SQL saturation and Advisor performance recommendations."""
+        metrics = self.data.get("metrics", {})
+        advisor = self.data.get("advisor", {})
+
+        def real_rows(source, sheet_name):
+            return [
+                row for row in source.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def render_table(rows, columns, empty_en, empty_es, limit=15):
+            if not rows:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+            body = ""
+            for i, row in enumerate(rows):
+                cells = "".join(
+                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    for key, _, _, numeric in columns
+                )
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f"<tr{row_attr}>{cells}</tr>"
+            more = ""
+            if len(rows) > limit:
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
+                less_text = bi("Show less", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
+
+        vm_metrics = real_rows(metrics, "VM_RightSizing")
+        saturated_vm = [v for v in vm_metrics if "saturated" in str(v.get("Assessment", "")).lower()]
+        sql_metrics = real_rows(metrics, "SQL_RightSizing")
+        saturated_sql = [s for s in sql_metrics if "saturated" in str(s.get("Assessment", "")).lower()]
+        perf_recs = real_rows(advisor, "Performance")
+
+        score = self.engine.scores.get("Performance Efficiency", 0)
+        stats = [
+            (f"{score}/100", bi("Performance Score", "Puntaje de Rendimiento"), "security-accent"),
+            (len(saturated_vm), bi("Saturated VMs (>80% CPU)", "VMs Saturadas (>80% CPU)"), "security-danger" if saturated_vm else ""),
+            (len(saturated_sql), bi("Saturated SQL DBs", "BD SQL Saturadas"), "security-danger" if saturated_sql else ""),
+            (len(perf_recs), bi("Advisor Performance Recs", "Recom. de Rendimiento"), ""),
+        ]
+        stat_html = "".join(
+            f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
+            for value, label, color_class in stats
+        )
+
+        vm_table = render_table(saturated_vm, [
+            ("Name", "VM", "VM", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("VMSize", "Size", "Tama\u00f1o", False),
+            ("AvgCPU_Pct", "Avg CPU %", "CPU Prom. %", True),
+            ("MaxCPU_Pct", "Max CPU %", "CPU M\u00e1x. %", True),
+        ], "No saturated VMs found.", "No se encontraron VMs saturadas.")
+        sql_table = render_table(saturated_sql, [
+            ("Name", "Database", "Base de Datos", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("SKU", "SKU", "SKU", False),
+            ("MetricType", "Metric", "M\u00e9trica", False),
+            ("AvgUsage_Pct", "Avg Usage %", "Uso Prom. %", True),
+        ], "No saturated SQL databases found.", "No se encontraron bases de datos SQL saturadas.")
+        recs_table = render_table(perf_recs, [
+            ("impact", "Impact", "Impacto", False),
+            ("impactedResource", "Resource", "Recurso", False),
+            ("problem", "Problem", "Problema", False),
+            ("solution", "Solution", "Soluci\u00f3n", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "No Advisor performance recommendations found.", "No se encontraron recomendaciones de rendimiento de Advisor.")
+
+        return f"""
+        <div class="security-summary-band">
+            <div>
+                <div class="security-eyebrow" style="color: var(--cp-warning);">PERFORMANCE EFFICIENCY</div>
+                <h2>{bi('Workload scaling and utilization', 'Escalado y utilizaci\u00f3n de cargas de trabajo')}</h2>
+                <p>{bi('Saturated VMs and SQL databases, plus Advisor performance recommendations in one view.', 'VMs y bases de datos SQL saturadas, m\u00e1s recomendaciones de rendimiento de Advisor en una sola vista.')}</p>
+            </div>
+            <div class="security-score-mark" style="color: var(--cp-warning);">{score}/100</div>
+        </div>
+        <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Resource saturation', 'Saturaci\u00f3n de recursos')}</div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales')}</h3>{vm_table}</div>
+                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL')}</h3>{sql_table}</div>
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Advisor performance recommendations', 'Recomendaciones de rendimiento de Advisor')}</div>
+            {recs_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Score breakdown', 'Desglose de puntaje')}</div>
+            {self._render_subcategory_table("Performance Efficiency")}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Action items', 'Elementos de acci\u00f3n')}</div>
+            {self._render_actions_for_pillar("Performance Efficiency")}
+        </div>"""
+
+    def _render_operational_view(self) -> str:
+        """Render operational excellence: diagnostics coverage, tagging, resource locks, policy compliance, and Advisor recommendations."""
+        metrics = self.data.get("metrics", {})
+        discovery = self.data.get("discovery", {})
+        governance = self.data.get("governance", {})
+        advisor = self.data.get("advisor", {})
+
+        def real_rows(source, sheet_name):
+            return [
+                row for row in source.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def as_int(value):
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def render_table(rows, columns, empty_en, empty_es, limit=15):
+            if not rows:
+                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+            body = ""
+            for i, row in enumerate(rows):
+                cells = "".join(
+                    f'<td class="{"num" if numeric else ""}">{escape(str(row.get(key, "")))}</td>'
+                    for key, _, _, numeric in columns
+                )
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f"<tr{row_attr}>{cells}</tr>"
+            more = ""
+            if len(rows) > limit:
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
+                less_text = bi("Show less", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
+
+        diag = real_rows(metrics, "DiagnosticsCoverage")
+        no_diag = [d for d in diag if str(d.get("HasDiagnostics", d.get("Gap", ""))).lower() in ("false", "no diagnostics configured")]
+
+        TAGGABLE_SHEETS = ["VMs", "AppServices", "AKS", "VNets", "NSGs", "LoadBalancers",
+                           "Firewalls", "PublicIPs", "Storage", "Databases", "KeyVaults"]
+        untagged = []
+        total_taggable = 0
+        for sheet in TAGGABLE_SHEETS:
+            for r in real_rows(discovery, sheet):
+                total_taggable += 1
+                tags = r.get("tags")
+                if not tags or str(tags).strip().lower() in ("", "none", "{}"):
+                    untagged.append({
+                        "Type": sheet,
+                        "Name": r.get("name", r.get("Name", "")),
+                        "ResourceGroup": r.get("resourceGroup", r.get("ResourceGroup", "")),
+                    })
+
+        locks = real_rows(governance, "Locks")
+        policy_compliance = real_rows(governance, "PolicyCompliance")
+        non_compliant = [c for c in policy_compliance if as_int(c.get("NonCompliantCount", 0)) > 0]
+        opex_recs = real_rows(advisor, "OperationalExcellence")
+
+        score = self.engine.scores.get("Operational Excellence", 0)
+        stats = [
+            (f"{score}/100", bi("OpEx Score", "Puntaje OpEx"), "security-accent"),
+            (len(no_diag), bi("Missing Diagnostic Settings", "Sin Configuraci\u00f3n de Diagn\u00f3stico"), "security-warning" if no_diag else ""),
+            (f"{len(untagged)}/{total_taggable}", bi("Untagged Resources", "Recursos sin Etiquetas"), "security-warning" if untagged else ""),
+            (len(locks), bi("Resource Locks", "Bloqueos de Recursos"), "" if locks else "security-danger"),
+            (len(non_compliant), bi("Non-Compliant Policy Evaluations", "Evaluaciones No Conformes"), "security-warning" if non_compliant else ""),
+            (len(opex_recs), bi("Advisor OpEx Recs", "Recom. OpEx"), ""),
+        ]
+        stat_html = "".join(
+            f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
+            for value, label, color_class in stats
+        )
+
+        diag_table = render_table(no_diag, [
+            ("Name", "Resource", "Recurso", False),
+            ("Type", "Type", "Tipo", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+            ("Gap", "Gap", "Brecha", False),
+        ], "All critical resources have diagnostic settings configured.", "Todos los recursos cr\u00edticos tienen configuraci\u00f3n de diagn\u00f3stico.")
+        tags_table = render_table(untagged, [
+            ("Type", "Resource Type", "Tipo de Recurso", False),
+            ("Name", "Name", "Nombre", False),
+            ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "All resources are tagged.", "Todos los recursos tienen etiquetas.")
+        locks_table = render_table(locks, [
+            ("name", "Name", "Nombre", False),
+            ("lockLevel", "Level", "Nivel", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "No resource locks configured.", "No hay bloqueos de recursos configurados.")
+        recs_table = render_table(opex_recs, [
+            ("impact", "Impact", "Impacto", False),
+            ("impactedResource", "Resource", "Recurso", False),
+            ("problem", "Problem", "Problema", False),
+            ("solution", "Solution", "Soluci\u00f3n", False),
+            ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
+        ], "No Advisor operational excellence recommendations found.", "No se encontraron recomendaciones de excelencia operativa de Advisor.")
+
+        return f"""
+        <div class="security-summary-band">
+            <div>
+                <div class="security-eyebrow" style="color: var(--cp-accent);">OPERATIONAL EXCELLENCE</div>
+                <h2>{bi('Observability, tagging, and governance hygiene', 'Observabilidad, etiquetado e higiene de gobernanza')}</h2>
+                <p>{bi('Diagnostic settings coverage, tagging compliance, resource locks, and Advisor operational recommendations in one view.', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico, cumplimiento de etiquetado, bloqueos de recursos y recomendaciones operativas de Advisor en una sola vista.')}</p>
+            </div>
+            <div class="security-score-mark" style="color: var(--cp-accent);">{score}/100</div>
+        </div>
+        <div class="security-stats">{stat_html}</div>
+
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Diagnostic settings coverage', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico')}</div>
+            {diag_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Untagged resources', 'Recursos sin etiquetas')}</div>
+            {tags_table}
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos')}</h3>{locks_table}</div>
+            <div class="security-panel"><h3>{bi('Advisor operational excellence recommendations', 'Recomendaciones de excelencia operativa de Advisor')}</h3>{recs_table}</div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Score breakdown', 'Desglose de puntaje')}</div>
+            {self._render_subcategory_table("Operational Excellence")}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Action items', 'Elementos de acci\u00f3n')}</div>
+            {self._render_actions_for_pillar("Operational Excellence")}
+        </div>"""
 
     def _render_score_breakdown(self) -> str:
         """Render the 'why' behind each pillar score per the Advisor Score model."""
@@ -1325,8 +2322,12 @@ class DashboardGenerator:
         overall = self.engine.get_overall_score()
         scores = self.engine.scores
         score_breakdown_html = self._render_score_breakdown()
-        governance_overview_html = self._render_governance_overview()
+        governance_view_html = self._render_governance_view()
         security_view_html = self._render_security_view()
+        cost_view_html = self._render_cost_view()
+        reliability_view_html = self._render_reliability_view()
+        performance_view_html = self._render_performance_view()
+        operational_view_html = self._render_operational_view()
         action_items = sorted(self.engine.action_items, 
                             key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(x["severity"], 5))
         
@@ -1408,126 +2409,153 @@ class DashboardGenerator:
 <style>
 :root {{
     color-scheme: light;
-    --cp-bg: #f7f4ef;
-    --cp-bg-elevated: #fcfbf8;
+    --cp-bg: #f5f5f7;
+    --cp-bg-elevated: #ffffff;
     --cp-surface: #ffffff;
-    --cp-surface-soft: #f5f5f5;
-    --cp-border: #dedede;
-    --cp-border-strong: #919191;
-    --cp-text: #242424;
-    --cp-text-muted: #5c5c5c;
-    --cp-text-soft: #6f6f6f;
-    --cp-accent: #b11f4b;
-    --cp-accent-hover: #9a1a41;
-    --cp-accent-soft: rgba(177, 31, 75, 0.08);
+    --cp-surface-soft: #f5f5f7;
+    --cp-border: rgba(0, 0, 0, 0.08);
+    --cp-border-strong: rgba(0, 0, 0, 0.16);
+    --cp-text: #1d1d1f;
+    --cp-text-muted: #6e6e73;
+    --cp-text-soft: #86868b;
+    --cp-accent: #0071e3;
+    --cp-accent-hover: #0077ed;
+    --cp-accent-soft: rgba(0, 113, 227, 0.08);
     --cp-accent-fg: #ffffff;
-    --cp-success: #16a34a;
-    --cp-danger: #dc2626;
-    --cp-warning: #f59e0b;
-    --cp-link: #0078d4;
-    --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
-    --cp-overlay: rgba(255, 255, 255, 0.8);
-    --cp-panel: rgba(255, 255, 255, 0.86);
-    --cp-panel-strong: rgba(255, 255, 255, 0.96);
-    --cp-sheen: rgba(255, 255, 255, 0.55);
-    --cp-highlight: rgba(177, 31, 75, 0.12);
-    --overview-header-start: #0078d4;
-    --overview-header-end: #005a9e;
-    --security-header: #b11f4b;
-    --header-fg: #ffffff;
+    --cp-success: #1d9a4a;
+    --cp-danger: #ff3b30;
+    --cp-warning: #ff9500;
+    --cp-link: #0071e3;
+    --cp-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.06);
+    --cp-overlay: rgba(255, 255, 255, 0.75);
+    --cp-panel: rgba(255, 255, 255, 0.72);
+    --cp-panel-strong: rgba(255, 255, 255, 0.94);
+    --cp-sheen: rgba(255, 255, 255, 0.6);
+    --cp-highlight: rgba(0, 113, 227, 0.1);
+    --overview-header-start: #f5f5f7;
+    --overview-header-end: #f5f5f7;
+    --cp-radius-lg: 22px;
+    --cp-radius-md: 16px;
+    --cp-radius-sm: 12px;
+    --cp-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
 }}
 html[data-theme="dark"] {{
     color-scheme: dark;
-    --cp-bg: #3d3b3a;
-    --cp-bg-elevated: #343231;
-    --cp-surface: #292929;
-    --cp-surface-soft: #2e2e2e;
-    --cp-border: #474747;
-    --cp-border-strong: #5f5f5f;
-    --cp-text: #dedede;
-    --cp-text-muted: #919191;
-    --cp-text-soft: #b0b0b0;
-    --cp-accent: #fd8ea1;
-    --cp-accent-hover: #fb7b91;
-    --cp-accent-soft: rgba(253, 142, 161, 0.14);
-    --cp-accent-fg: #1a1a1a;
-    --cp-success: #4ade80;
-    --cp-danger: #f87171;
-    --cp-warning: #fbbf24;
-    --cp-link: #4da6ff;
-    --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
-    --cp-overlay: rgba(41, 41, 41, 0.88);
-    --cp-panel: rgba(41, 41, 41, 0.72);
-    --cp-panel-strong: rgba(41, 41, 41, 0.96);
+    --cp-bg: #000000;
+    --cp-bg-elevated: #1c1c1e;
+    --cp-surface: #1c1c1e;
+    --cp-surface-soft: #2c2c2e;
+    --cp-border: rgba(255, 255, 255, 0.08);
+    --cp-border-strong: rgba(255, 255, 255, 0.16);
+    --cp-text: #f5f5f7;
+    --cp-text-muted: #a1a1a6;
+    --cp-text-soft: #86868b;
+    --cp-accent: #0a84ff;
+    --cp-accent-hover: #409cff;
+    --cp-accent-soft: rgba(10, 132, 255, 0.16);
+    --cp-accent-fg: #ffffff;
+    --cp-success: #30d158;
+    --cp-danger: #ff453a;
+    --cp-warning: #ff9f0a;
+    --cp-link: #0a84ff;
+    --cp-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.4);
+    --cp-overlay: rgba(28, 28, 30, 0.75);
+    --cp-panel: rgba(28, 28, 30, 0.72);
+    --cp-panel-strong: rgba(28, 28, 30, 0.94);
     --cp-sheen: rgba(255, 255, 255, 0.04);
-    --cp-highlight: rgba(253, 142, 161, 0.12);
-    --overview-header-start: #0078d4;
-    --overview-header-end: #005a9e;
-    --security-header: #b11f4b;
-    --header-fg: #ffffff;
+    --cp-highlight: rgba(10, 132, 255, 0.16);
+    --overview-header-start: #1c1c1e;
+    --overview-header-end: #1c1c1e;
 }}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
-        font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
         background: var(--cp-bg); color: var(--cp-text);
-    line-height: 1.5;
+    line-height: 1.47059; -webkit-font-smoothing: antialiased; letter-spacing: -0.01em;
 }}
-.dashboard {{ max-width: 1400px; margin: 0 auto; padding: 24px; }}
+.dashboard {{ max-width: 1400px; margin: 0 auto; padding: 32px 24px 24px; }}
 
 /* Header */
 .header {{
-    background: linear-gradient(135deg, var(--overview-header-start), var(--overview-header-end));
-    color: var(--header-fg); padding: 32px; border-radius: 10px;
+    background: linear-gradient(135deg, #063466 0%, #00152e 100%);
+    color: #ffffff; padding: 40px 40px 32px; border-radius: var(--cp-radius-lg);
+    border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: var(--cp-shadow);
     margin-bottom: 24px; position: relative;
 }}
-body.security-view .header {{
-    background: var(--security-header);
-    color: var(--header-fg);
-}}
-.header h1 {{ font-size: 28px; margin-bottom: 8px; }}
-.header .subtitle {{ opacity: 0.85; font-size: 14px; }}
+.header h1 {{ font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 0; min-width: 0; }}
+.header-brand {{ display: flex; align-items: center; gap: 24px; margin-bottom: 12px; }}
+.header-logo {{ width: 96px; height: 96px; flex-shrink: 0; }}
+.header-brand .az-icon.header-logo {{ width: 96px; height: 96px; }}
+.header-title-sub {{ display: block; font-size: 22px; font-weight: 700; margin-top: 2px; }}
+.header .subtitle {{ color: rgba(255, 255, 255, 0.78); font-size: 14px; font-weight: 400; }}
 
-/* Dashboard views */
+/* Dashboard views (segmented control) */
 .view-tabs {{
-    display: flex; width: fit-content; gap: 4px; padding: 4px;
-    margin-bottom: 24px; background: var(--cp-surface-soft); border: 1px solid var(--cp-border); border-radius: 8px;
+    display: flex; flex-wrap: wrap; justify-content: space-evenly; width: 100%; gap: 10px; padding: 4px;
+    margin: 0 auto 24px; background: var(--cp-surface-soft); border: 1px solid var(--cp-border); border-radius: 980px;
+    position: relative;
+}}
+.view-tab-thumb {{
+    position: absolute; top: 4px; left: 0; height: calc(100% - 8px); width: 0;
+    background: var(--cp-surface); border-radius: 980px; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    transition: transform 0.4s var(--cp-ease), width 0.4s var(--cp-ease);
+    will-change: transform, width; z-index: 0; pointer-events: none;
 }}
 .view-tab {{
     border: 0; background: transparent; color: var(--cp-text-muted); cursor: pointer;
-    padding: 8px 18px; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 600;
+    padding: 8px 20px; border-radius: 980px; font: inherit; font-size: 13px; font-weight: 590;
+    transition: color 0.25s var(--cp-ease); position: relative; z-index: 1;
 }}
-.view-tab[aria-selected="true"] {{ background: var(--cp-surface); color: var(--cp-accent); }}
+.view-tab[aria-selected="true"] {{ color: var(--cp-text); }}
+.dashboard-view {{ transition: opacity 0.22s var(--cp-ease), transform 0.22s var(--cp-ease); opacity: 1; transform: translateY(0); }}
+.dashboard-view.view-fade-out {{ opacity: 0; transform: translateY(6px); }}
+.dashboard-view.view-fade-in {{ opacity: 0; transform: translateY(6px); }}
 .dashboard-view[hidden] {{ display: none; }}
 
 /* Dedicated security view */
 .security-summary-band {{
     display: flex; justify-content: space-between; align-items: center; gap: 24px;
-    background: var(--cp-bg-elevated); color: var(--cp-text); padding: 28px 32px; border-left: 6px solid var(--cp-accent);
+    background: var(--cp-surface); color: var(--cp-text); padding: 28px 32px;
+    border: 1px solid var(--cp-border); border-radius: var(--cp-radius-lg); box-shadow: var(--cp-shadow);
     margin-bottom: 18px;
 }}
-.security-summary-band h2 {{ font-size: 24px; margin: 2px 0 6px; }}
+.security-summary-band h2 {{ font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin: 2px 0 6px; }}
 .security-summary-band p {{ color: var(--cp-text-muted); font-size: 13px; }}
-.security-eyebrow {{ color: var(--cp-warning); font-size: 10px; font-weight: 700; letter-spacing: 1px; }}
-.security-score-mark {{ font-size: 44px; font-weight: 700; color: var(--cp-accent); white-space: nowrap; }}
+.security-eyebrow {{ color: var(--cp-danger); font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }}
+.security-score-mark {{ font-size: 44px; font-weight: 700; letter-spacing: -0.02em; color: var(--cp-danger); white-space: nowrap; }}
 .security-stats {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }}
-.security-stat {{ background: var(--cp-surface); border-top: 3px solid var(--cp-border-strong); padding: 16px; min-width: 0; }}
-.security-stat .value {{ font-size: 27px; font-weight: 700; }}
+.security-stat {{
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md);
+    padding: 18px; min-width: 0; box-shadow: var(--cp-shadow); transition: transform 0.2s var(--cp-ease);
+}}
+.security-stat:hover {{ transform: translateY(-2px); }}
+.security-stat .value {{ font-size: 27px; font-weight: 700; letter-spacing: -0.02em; }}
 .security-stat .label {{ color: var(--cp-text-muted); font-size: 11px; margin-top: 4px; }}
 .security-accent {{ color: var(--cp-link); }}
 .security-danger {{ color: var(--cp-danger); }}
 .security-warning {{ color: var(--cp-warning); }}
-.security-title {{ border-bottom-color: var(--cp-accent); }}
+.security-title {{ border-bottom-color: var(--cp-danger); }}
 .security-two-column {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-bottom: 24px; }}
-.security-panel {{ background: var(--cp-surface); padding: 18px; min-width: 0; border-top: 3px solid var(--cp-border-strong); }}
-.security-panel h3 {{ font-size: 14px; margin-bottom: 12px; }}
+.security-panel {{
+    background: var(--cp-surface); padding: 20px; min-width: 0;
+    border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); box-shadow: var(--cp-shadow);
+}}
+.security-panel h3 {{ font-size: 14px; font-weight: 590; margin-bottom: 12px; }}
 .security-table-wrap {{ width: 100%; overflow-x: auto; }}
 .security-table-wrap table {{ min-width: 540px; }}
 .empty-state {{ color: var(--cp-text-muted); font-size: 12px; padding: 16px 0; }}
-.source-status {{ display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; }}
-.source-available, .source-nodata {{ background: var(--cp-highlight); color: var(--cp-success); }}
-.source-partial {{ background: var(--cp-accent-soft); color: var(--cp-warning); }}
-.source-forbidden, .source-unavailable, .source-error {{ background: var(--cp-accent-soft); color: var(--cp-danger); }}
+.source-status {{ display: inline-block; padding: 3px 10px; border-radius: 980px; font-size: 10px; font-weight: 700; }}
+.source-available, .source-nodata {{ background: rgba(48, 209, 88, 0.12); color: var(--cp-success); }}
+.source-partial {{ background: rgba(255, 149, 0, 0.14); color: var(--cp-warning); }}
+.source-forbidden, .source-unavailable, .source-error {{ background: rgba(255, 59, 48, 0.12); color: var(--cp-danger); }}
 .source-skipped {{ background: var(--cp-surface-soft); color: var(--cp-text-muted); }}
+.security-success {{ color: var(--cp-success); }}
+.cost-dist {{ display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }}
+.cost-dist-row {{ display: grid; grid-template-columns: minmax(90px, auto) 1fr 24px; align-items: center; gap: 8px; font-size: 11px; }}
+.cost-dist-label {{ color: var(--cp-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.cost-dist-track {{ height: 6px; border-radius: 980px; background: var(--cp-surface-soft); overflow: hidden; }}
+.cost-dist-fill {{ height: 100%; border-radius: 980px; }}
+.cost-dist-count {{ text-align: right; font-weight: 600; }}
 @media (max-width: 1050px) {{ .security-stats {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
 @media (max-width: 760px) {{
     .view-tabs {{ width: 100%; }}
@@ -1542,8 +2570,8 @@ body.security-view .header {{
 .score-section {{
     display: grid; grid-template-columns: 200px 1fr;
     gap: 24px; margin-bottom: 24px;
-    background: var(--cp-surface); border-radius: 10px; padding: 24px;
-    box-shadow: var(--cp-shadow);
+    background: var(--cp-surface); border-radius: var(--cp-radius-lg); padding: 32px;
+    border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow);
 }}
 .overall-score {{
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1560,39 +2588,43 @@ body.security-view .header {{
 }}
 .score-circle::after {{
     content: '{overall}'; position: absolute;
-    width: 110px; height: 110px; border-radius: 50%;
+    width: 114px; height: 114px; border-radius: 50%;
     background: var(--cp-surface); display: flex; align-items: center; justify-content: center;
-    font-size: 42px; font-weight: 700;
+    font-size: 40px; font-weight: 700; letter-spacing: -0.02em;
     color: {'var(--cp-success)' if overall >= 80 else 'var(--cp-warning)' if overall >= 50 else 'var(--cp-danger)'};
 }}
-.score-label {{ margin-top: 8px; font-size: 14px; color: var(--cp-text-muted); font-weight: 600; }}
+.score-label {{ margin-top: 12px; font-size: 13px; color: var(--cp-text-muted); font-weight: 590; }}
 
 .pillars-grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;
 }}
 .pillar-card {{
-    background: var(--cp-surface-soft); border-radius: 8px; padding: 16px;
-    border: 1px solid var(--cp-border);
+    background: var(--cp-surface-soft); border-radius: var(--cp-radius-md); padding: 18px;
+    border: 1px solid var(--cp-border); transition: transform 0.2s var(--cp-ease), box-shadow 0.2s var(--cp-ease);
 }}
-.pillar-score {{ font-size: 32px; font-weight: 700; }}
-.pillar-bar {{ height: 6px; background: var(--cp-border); border-radius: 3px; margin: 8px 0; }}
-.pillar-bar-fill {{ height: 100%; border-radius: 3px; transition: width 0.5s; }}
-.pillar-name {{ font-size: 12px; font-weight: 600; color: var(--cp-text-muted); }}
+.pillar-card:hover {{ transform: translateY(-2px); box-shadow: var(--cp-shadow); }}
+.pillar-score {{ font-size: 32px; font-weight: 700; letter-spacing: -0.02em; }}
+.pillar-bar {{ height: 5px; background: var(--cp-border); border-radius: 980px; margin: 10px 0; overflow: hidden; }}
+.pillar-bar-fill {{ height: 100%; border-radius: 980px; transition: width 0.6s var(--cp-ease); }}
+.pillar-name {{ font-size: 12px; font-weight: 590; color: var(--cp-text-muted); }}
 
 @media (max-width: 700px) {{
-    .dashboard {{ padding: 12px; }}
-    .header {{ padding: 64px 16px 24px; }}
-    .header h1 {{ padding-right: 0; }}
+    .dashboard {{ padding: 16px; }}
+    .header {{ padding: 72px 20px 24px; }}
+    .header h1 {{ padding-right: 0; font-size: 24px; }}
+    .header-title-sub {{ font-size: 18px; }}
+    .header-logo {{ width: 40px; height: 40px; }}
+    .header-brand .az-icon.header-logo {{ width: 40px; height: 40px; }}
     .header-controls {{ top: 16px; right: 16px; }}
-    .score-section {{ grid-template-columns: minmax(0, 1fr); padding: 16px; }}
+    .score-section {{ grid-template-columns: minmax(0, 1fr); padding: 20px; }}
     .pillars-grid {{ grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); min-width: 0; }}
     .pillar-card {{ min-width: 0; }}
 }}
 
 /* Score Breakdown */
 .methodology-note {{
-    background: var(--cp-accent-soft); border: 1px solid var(--cp-border); border-radius: 8px;
-    padding: 12px 16px; font-size: 12px; color: var(--cp-text); margin-bottom: 16px;
+    background: var(--cp-accent-soft); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md);
+    padding: 14px 18px; font-size: 12px; color: var(--cp-text); margin-bottom: 16px;
 }}
 .methodology-note a {{ color: var(--cp-link); }}
 .breakdown-grid {{
@@ -1601,10 +2633,12 @@ body.security-view .header {{
 }}
 @media (min-width: 701px) {{ .breakdown-grid {{ grid-auto-rows: 1fr; }} }}
 .breakdown-card {{
-    background: var(--cp-surface); border-radius: 10px; padding: 16px;
-    box-shadow: var(--cp-shadow); min-width: 0;
+    background: var(--cp-surface); border-radius: var(--cp-radius-md); padding: 18px;
+    border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); min-width: 0;
+    transition: transform 0.2s var(--cp-ease);
 }}
-.breakdown-card h4 {{ font-size: 13px; margin-bottom: 10px; display: flex; justify-content: space-between; }}
+.breakdown-card:hover {{ transform: translateY(-2px); }}
+.breakdown-card h4 {{ font-size: 13px; font-weight: 590; margin-bottom: 10px; display: flex; justify-content: space-between; }}
 .breakdown-score {{ color: var(--cp-link); }}
 .breakdown-note {{ font-size: 12px; color: var(--cp-text-muted); }}
 .breakdown-table-wrap {{ width: 100%; overflow-x: auto; }}
@@ -1614,18 +2648,45 @@ body.security-view .header {{
 .cost-source-col {{ width: 34%; }}
 .cost-findings-col {{ width: 26%; }}
 
-/* Governance Visualizer embed */
-.governance-embed {{ margin-top: 16px; }}
-.governance-embed-toolbar {{
-    background: var(--cp-surface); border-radius: 8px 8px 0 0; padding: 10px 16px;
-    border: 1px solid var(--cp-border); border-bottom: none; font-size: 12px;
+/* Governance view (native hierarchy tree, scope insights) */
+.mg-tree, .mg-tree ul {{ list-style: none; padding-left: 30px; }}
+.mg-tree {{ padding-left: 0; }}
+.mg-tree li {{ margin: 8px 0; }}
+.mg-node-details > summary {{ list-style: none; cursor: pointer; }}
+.mg-node-details > summary::-webkit-details-marker {{ display: none; }}
+.mg-node {{
+    display: inline-flex; align-items: center; gap: 12px; background: var(--cp-surface);
+    border: 1px solid var(--cp-border); border-radius: 980px; padding: 10px 18px; font-size: 15px; font-weight: 590;
 }}
-.governance-embed-toolbar a {{ color: var(--cp-link); text-decoration: none; font-weight: 600; }}
-/* Fallback height covers most reports; onload JS below grows it to the real content height when the browser allows cross-frame access. */
-.governance-embed iframe {{
-    width: 100%; height: 1400px; border: 1px solid var(--cp-border); border-radius: 0 0 8px 8px;
-    background: var(--cp-surface);
+.mg-name {{ white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }}
+.az-icon {{ width: 22px; height: 22px; flex-shrink: 0; vertical-align: middle; }}
+.mg-badge .az-icon {{ width: 14px; height: 14px; }}
+.mg-sub-leaf .az-icon {{ width: 18px; height: 18px; }}
+.mg-badge {{
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 26px; height: 26px;
+    border-radius: 980px; font-size: 12px; font-weight: 700; padding: 0 10px;
 }}
+.mg-badge-policy {{ background: rgba(0, 120, 212, 0.14); color: var(--cp-link); }}
+.mg-badge-rbac {{ background: rgba(255, 149, 0, 0.14); color: var(--cp-warning); }}
+.mg-badge-subs {{ background: rgba(48, 209, 88, 0.12); color: var(--cp-success); }}
+.mg-sub-leaf {{ font-size: 14px; color: var(--cp-text-muted); padding: 6px 0; list-style: none; display: flex; align-items: center; gap: 8px; }}
+.scope-insights {{ display: flex; flex-direction: column; gap: 6px; }}
+.scope-detail {{
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); padding: 10px 14px;
+}}
+.scope-detail summary {{ cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+.scope-detail .scope-id {{ color: var(--cp-text-muted); font-weight: 400; }}
+.scope-detail p {{ font-size: 12px; margin: 8px 0; }}
+.mini-table {{ width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }}
+.mini-table th, .mini-table td {{ border: 1px solid var(--cp-border); padding: 4px 8px; text-align: left; }}
+.table-more-note {{
+    display: block; width: 100%; text-align: left; font-size: 11px; color: var(--cp-accent); font-weight: 600;
+    margin-top: 6px; padding: 4px 0; background: none; border: none; cursor: pointer; font-family: inherit;
+}}
+.table-more-note:hover {{ text-decoration: underline; }}
+.table-more-note .less-label {{ display: none; }}
+.table-more-note.expanded .more-label {{ display: none; }}
+.table-more-note.expanded .less-label {{ display: inline; }}
 
 /* Stats */
 .stats-row {{
@@ -1633,33 +2694,37 @@ body.security-view .header {{
     gap: 16px; margin-bottom: 24px;
 }}
 .stat-box {{
-    background: var(--cp-surface); border-radius: 10px; padding: 20px;
-    box-shadow: var(--cp-shadow); text-align: center;
+    background: var(--cp-surface); border-radius: var(--cp-radius-md); padding: 24px;
+    border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); text-align: center;
+    transition: transform 0.2s var(--cp-ease);
 }}
-.stat-box .value {{ font-size: 36px; font-weight: 700; color: var(--cp-link); }}
+.stat-box:hover {{ transform: translateY(-2px); }}
+.stat-box .value {{ font-size: 36px; font-weight: 700; letter-spacing: -0.02em; color: var(--cp-link); }}
 .stat-box .label {{ font-size: 12px; color: var(--cp-text-muted); margin-top: 4px; }}
 
 /* Action Items */
 .section {{ margin-bottom: 24px; }}
 .section-title {{
-    font-size: 18px; font-weight: 700; margin-bottom: 16px;
-    padding-bottom: 8px; border-bottom: 2px solid var(--cp-accent);
+    font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 16px;
+    padding-bottom: 10px; border-bottom: 2px solid var(--cp-accent);
 }}
 .action-item {{
-    background: var(--cp-surface); border-radius: 8px; padding: 16px; margin-bottom: 12px;
-    box-shadow: var(--cp-shadow);
+    background: var(--cp-surface); border-radius: var(--cp-radius-md); padding: 18px; margin-bottom: 12px;
+    border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow);
+    transition: transform 0.2s var(--cp-ease);
 }}
+.action-item:hover {{ transform: translateY(-1px); }}
 .action-header {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
 .action-num {{ font-weight: 700; color: var(--cp-text-soft); font-size: 12px; }}
 .severity-badge {{
-    color: var(--cp-accent-fg); padding: 2px 8px; border-radius: 4px;
+    color: var(--cp-accent-fg); padding: 3px 10px; border-radius: 980px;
     font-size: 10px; font-weight: 700; text-transform: uppercase;
 }}
 .pillar-tag {{
-    background: var(--cp-surface-soft); padding: 2px 8px; border-radius: 4px;
+    background: var(--cp-surface-soft); padding: 3px 10px; border-radius: 980px;
     font-size: 10px; color: var(--cp-text-muted);
 }}
-.action-title {{ font-weight: 600; font-size: 14px; }}
+.action-title {{ font-weight: 590; font-size: 14px; }}
 .action-desc {{ color: var(--cp-text-muted); margin-top: 8px; font-size: 13px; }}
 .resource-list {{
     margin-top: 8px; padding-left: 20px;
@@ -1673,22 +2738,22 @@ body.security-view .header {{
 }}
 @media (max-width: 900px) {{ .data-grid {{ grid-template-columns: 1fr; }} }}
 .table-card {{
-    background: var(--cp-surface); border-radius: 10px; padding: 20px;
-    box-shadow: var(--cp-shadow); min-width: 0;
+    background: var(--cp-surface); border-radius: var(--cp-radius-md); padding: 22px;
+    border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); min-width: 0;
 }}
-.table-card h3 {{ font-size: 14px; margin-bottom: 12px; color: var(--cp-text); }}
+.table-card h3 {{ font-size: 14px; font-weight: 590; margin-bottom: 12px; color: var(--cp-text); }}
 .table-card table {{ table-layout: fixed; }}
 .table-card th,
 .table-card td {{ overflow-wrap: anywhere; white-space: normal; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
-th {{ background: var(--cp-surface-soft); padding: 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--cp-border); }}
-td {{ padding: 6px 8px; border-bottom: 1px solid var(--cp-border); }}
+th {{ background: transparent; padding: 8px; text-align: left; font-weight: 590; color: var(--cp-text-muted); border-bottom: 1px solid var(--cp-border-strong); }}
+td {{ padding: 8px; border-bottom: 1px solid var(--cp-border); }}
 tr:hover td {{ background: var(--cp-accent-soft); }}
-.num {{ text-align: right; font-weight: 600; }}
+.num {{ text-align: right; font-weight: 590; }}
 
 /* Footer */
 .footer {{
-    text-align: center; padding: 24px; color: var(--cp-text-soft); font-size: 11px;
+    text-align: center; padding: 32px 24px; color: var(--cp-text-soft); font-size: 11px;
     border-top: 1px solid var(--cp-border); margin-top: 32px;
 }}
 
@@ -1697,18 +2762,17 @@ tr:hover td {{ background: var(--cp-accent-soft); }}
 body.lang-es .i18n-en {{ display: none; }}
 body.lang-es .i18n-es {{ display: inline; }}
 .header-controls {{
-    position: absolute; top: 20px; right: 24px;
+    position: absolute; top: 24px; right: 28px;
     display: flex; gap: 8px;
 }}
 .header-control {{
-    background: #004f87; color: #ffffff;
-    border: 1px solid rgba(255, 255, 255, 0.78); border-radius: 6px;
-    height: 34px; min-width: 38px; padding: 0 12px;
-    font-size: 12px; font-weight: 600; cursor: pointer;
+    background: rgba(255, 255, 255, 0.95); color: #1d1d1f;
+    border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 980px;
+    height: 34px; min-width: 38px; padding: 0 14px;
+    font-size: 12px; font-weight: 590; cursor: pointer;
+    box-shadow: var(--cp-shadow); transition: transform 0.2s var(--cp-ease), background 0.2s var(--cp-ease);
 }}
-.header-control:hover {{ background: #003f6c; }}
-body.security-view .header-control {{ background: #861532; }}
-body.security-view .header-control:hover {{ background: #6f1129; }}
+.header-control:hover {{ transform: translateY(-1px); background: #ffffff; }}
 .theme-toggle {{ font-size: 18px; line-height: 1; padding: 0; }}
 </style>
 </head>
@@ -1721,13 +2785,22 @@ body.security-view .header-control:hover {{ background: #6f1129; }}
         <button id="themeToggleBtn" class="header-control theme-toggle" onclick="toggleTheme()" type="button" aria-label="Switch to night mode" title="Switch to night mode">☾</button>
         <button id="langToggleBtn" class="header-control lang-toggle" onclick="toggleLang()" type="button">ES 🇪🇸</button>
     </div>
-    <h1>☁️ {bi("Azure WAF/CAF Workshop - Discovery Report", "Taller Azure WAF/CAF - Informe de Descubrimiento")}</h1>
+    <div class="header-brand">
+        {self._azure_icon("azure-logo", "az-icon header-logo")}
+        <h1>{bi("Azure WAF/CAF Workshop", "Taller Azure WAF/CAF")}<span class="header-title-sub">{bi("Discovery Report", "Informe de Descubrimiento")}</span></h1>
+    </div>
     <div class="subtitle">{bi("Generated", "Generado")}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {bi("Consolidated view across all discovery phases", "Vista consolidada de todas las fases de descubrimiento")}</div>
 </div>
 
-<div class="view-tabs" role="tablist" aria-label="Dashboard views">
+<div class="view-tabs" id="viewTabsBar" role="tablist" aria-label="Dashboard views">
+    <span id="viewTabThumb" class="view-tab-thumb" aria-hidden="true"></span>
     <button id="overviewTab" class="view-tab" role="tab" aria-selected="true" aria-controls="overviewView" onclick="setDashboardView('overview')" type="button">{bi('Overview', 'Resumen')}</button>
+    <button id="reliabilityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="reliabilityView" onclick="setDashboardView('reliability')" type="button">{bi('Reliability', 'Confiabilidad')}</button>
     <button id="securityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="securityView" onclick="setDashboardView('security')" type="button">{bi('Security', 'Seguridad')}</button>
+    <button id="costTab" class="view-tab" role="tab" aria-selected="false" aria-controls="costView" onclick="setDashboardView('cost')" type="button">{bi('Cost Opt', 'Optim. Costos')}</button>
+    <button id="operationalTab" class="view-tab" role="tab" aria-selected="false" aria-controls="operationalView" onclick="setDashboardView('operational')" type="button">{bi('OpEx', 'Exc. Operativa')}</button>
+    <button id="performanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="performanceView" onclick="setDashboardView('performance')" type="button">{bi('Performance', 'Rendimiento')}</button>
+    <button id="governanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="governanceView" onclick="setDashboardView('governance')" type="button">{bi('Governance', 'Gobernanza')}</button>
 </div>
 
 <main id="overviewView" class="dashboard-view" role="tabpanel" aria-labelledby="overviewTab">
@@ -1748,12 +2821,6 @@ body.security-view .header-control:hover {{ background: #6f1129; }}
     <div class="stat-box"><div class="value">{total_resources:,}</div><div class="label">{bi("Total Resources", "Recursos Totales")}</div></div>
     <div class="stat-box"><div class="value">{total_actions}</div><div class="label">{bi("Action Items", "Elementos de Acci\u00f3n")}</div></div>
     <div class="stat-box"><div class="value" style="color:var(--cp-danger);">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta")}</div></div>
-</div>
-
-<!-- Governance Visualizer (Hierarchy Map) -->
-<div class="section">
-    <div class="section-title">🏛️ {bi("Governance Visualizer", "Visualizador de Gobernanza")}</div>
-    {governance_overview_html}
 </div>
 
 <!-- Score Methodology -->
@@ -1808,6 +2875,26 @@ body.security-view .header-control:hover {{ background: #6f1129; }}
     {security_view_html}
 </main>
 
+<main id="governanceView" class="dashboard-view" role="tabpanel" aria-labelledby="governanceTab" hidden>
+    {governance_view_html}
+</main>
+
+<main id="costView" class="dashboard-view" role="tabpanel" aria-labelledby="costTab" hidden>
+    {cost_view_html}
+</main>
+
+<main id="reliabilityView" class="dashboard-view" role="tabpanel" aria-labelledby="reliabilityTab" hidden>
+    {reliability_view_html}
+</main>
+
+<main id="performanceView" class="dashboard-view" role="tabpanel" aria-labelledby="performanceTab" hidden>
+    {performance_view_html}
+</main>
+
+<main id="operationalView" class="dashboard-view" role="tabpanel" aria-labelledby="operationalTab" hidden>
+    {operational_view_html}
+</main>
+
 <!-- Footer -->
 <div class="footer">
     {bi("Azure WAF/CAF Workshop Discovery Report | Generated by Azure Governance Discovery Toolkit", "Informe de Descubrimiento del Taller Azure WAF/CAF | Generado por Azure Governance Discovery Toolkit")}<br>
@@ -1816,65 +2903,6 @@ body.security-view .header-control:hover {{ background: #6f1129; }}
 
 </div>
 <script>
-function syncGovernanceTheme() {{
-    var frame = document.getElementById('governanceVisualizerFrame');
-    if (!frame || !frame.contentDocument) return;
-    try {{
-        frame.contentDocument.documentElement.setAttribute(
-            'data-dashboard-theme',
-            document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
-        );
-    }} catch (e) {{}}
-}}
-function initializeGovernanceFrame(frame) {{
-    try {{
-        var doc = frame.contentDocument;
-        if (!doc.getElementById('wafDashboardThemeBridge')) {{
-            var style = doc.createElement('style');
-            style.id = 'wafDashboardThemeBridge';
-            style.textContent = `
-html[data-dashboard-theme="dark"] {{ color-scheme: dark; }}
-html[data-dashboard-theme="dark"] body {{ background: #202020 !important; color: #dedede !important; }}
-html[data-dashboard-theme="dark"] .panel-hierarchy {{ background: #292929 !important; }}
-html[data-dashboard-theme="dark"] .panel-summary {{ background: #253442 !important; }}
-html[data-dashboard-theme="dark"] .panel-scope {{ background: #2e2e2e !important; }}
-html[data-dashboard-theme="dark"] .panel-header {{ border-bottom-color: #555 !important; }}
-html[data-dashboard-theme="dark"] .panel-hierarchy .panel-header {{ background: #292929 !important; color: #4da6ff !important; }}
-html[data-dashboard-theme="dark"] .panel-summary .panel-header {{ background: #253442 !important; color: #8cc8ff !important; }}
-html[data-dashboard-theme="dark"] .panel-scope .panel-header {{ background: #2e2e2e !important; color: #dedede !important; }}
-html[data-dashboard-theme="dark"] .stat-card,
-html[data-dashboard-theme="dark"] .mg-node,
-html[data-dashboard-theme="dark"] .sub-node {{ background: #343434 !important; color: #dedede !important; border-color: #5f5f5f !important; }}
-html[data-dashboard-theme="dark"] .stat-card .stat-label,
-html[data-dashboard-theme="dark"] .scope-id,
-html[data-dashboard-theme="dark"] .no-data {{ color: #b0b0b0 !important; }}
-html[data-dashboard-theme="dark"] .collapsible {{ background: #343434 !important; color: #dedede !important; border-color: #5f5f5f !important; }}
-html[data-dashboard-theme="dark"] .collapsible:hover {{ background: #414141 !important; }}
-html[data-dashboard-theme="dark"] .table-search,
-html[data-dashboard-theme="dark"] .btn-csv {{ background: #292929 !important; color: #dedede !important; border-color: #5f5f5f !important; }}
-html[data-dashboard-theme="dark"] .data-table th {{ background: #343434 !important; color: #dedede !important; border-color: #555 !important; }}
-html[data-dashboard-theme="dark"] .data-table td {{ color: #dedede !important; border-color: #474747 !important; }}
-html[data-dashboard-theme="dark"] .data-table tbody tr:nth-child(even) {{ background: #303030 !important; }}
-html[data-dashboard-theme="dark"] .data-table tbody tr:hover {{ background: #263e50 !important; }}
-`;
-            doc.head.appendChild(style);
-        }}
-        var panels = Array.from(doc.body.children);
-        var fit = function() {{
-            var visible = panels.filter(function(element) {{
-                return frame.contentWindow.getComputedStyle(element).display !== 'none';
-            }});
-            var bottom = Math.max(0, ...visible.map(function(element) {{
-                return element.offsetTop + element.offsetHeight;
-            }}));
-            frame.style.height = (bottom + 2) + 'px';
-        }};
-        fit();
-        var observer = new ResizeObserver(fit);
-        panels.forEach(function(element) {{ observer.observe(element); }});
-        syncGovernanceTheme();
-    }} catch (e) {{}}
-}}
 function updateThemeButton() {{
     var btn = document.getElementById('themeToggleBtn');
     if (!btn) return;
@@ -1895,7 +2923,6 @@ function setTheme(theme, persist) {{
         try {{ localStorage.setItem('wafDashboardTheme', normalized); }} catch (e) {{}}
     }}
     updateThemeButton();
-    syncGovernanceTheme();
 }}
 function toggleTheme() {{
     setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
@@ -1907,19 +2934,66 @@ function setLang(lang) {{
     if (btn) {{ btn.textContent = lang === 'es' ? 'EN 🇬🇧' : 'ES 🇪🇸'; }}
     updateThemeButton();
     try {{ localStorage.setItem('wafDashboardLang', lang); }} catch (e) {{}}
+    moveTabThumb(currentDashboardView, true);
 }}
 function toggleLang() {{
     setLang(document.body.classList.contains('lang-es') ? 'en' : 'es');
 }}
-function setDashboardView(view) {{
-    var security = view === 'security';
-    document.body.classList.toggle('security-view', security);
-    document.getElementById('overviewView').hidden = security;
-    document.getElementById('securityView').hidden = !security;
-    document.getElementById('overviewTab').setAttribute('aria-selected', String(!security));
-    document.getElementById('securityTab').setAttribute('aria-selected', String(security));
-    try {{ localStorage.setItem('wafDashboardView', view); }} catch (e) {{}}
+function toggleTableRows(btn) {{
+    var wrap = btn.previousElementSibling;
+    if (!wrap) return;
+    var expanded = btn.classList.toggle('expanded');
+    var rows = wrap.querySelectorAll('.extra-row');
+    for (var i = 0; i < rows.length; i++) {{ rows[i].hidden = !expanded; }}
 }}
+var DASHBOARD_VIEWS = ['overview', 'reliability', 'security', 'cost', 'operational', 'performance', 'governance'];
+var currentDashboardView = 'overview';
+function moveTabThumb(view, skipAnimation) {{
+    var thumb = document.getElementById('viewTabThumb');
+    var tab = document.getElementById(view + 'Tab');
+    var bar = document.getElementById('viewTabsBar');
+    if (!thumb || !tab || !bar) return;
+    if (skipAnimation) {{ thumb.style.transition = 'none'; }}
+    var barRect = bar.getBoundingClientRect();
+    var tabRect = tab.getBoundingClientRect();
+    thumb.style.width = tabRect.width + 'px';
+    thumb.style.transform = 'translateX(' + (tabRect.left - barRect.left) + 'px)';
+    if (skipAnimation) {{
+        void thumb.offsetHeight;
+        thumb.style.transition = '';
+    }}
+}}
+function setDashboardView(view, animate) {{
+    var normalized = DASHBOARD_VIEWS.indexOf(view) !== -1 ? view : 'overview';
+    animate = animate !== false;
+    for (var i = 0; i < DASHBOARD_VIEWS.length; i++) {{
+        var tab = document.getElementById(DASHBOARD_VIEWS[i] + 'Tab');
+        if (tab) {{ tab.setAttribute('aria-selected', String(DASHBOARD_VIEWS[i] === normalized)); }}
+    }}
+    var prevPanel = document.getElementById(currentDashboardView + 'View');
+    var nextPanel = document.getElementById(normalized + 'View');
+    if (!animate || !prevPanel || prevPanel === nextPanel || !nextPanel) {{
+        for (var j = 0; j < DASHBOARD_VIEWS.length; j++) {{
+            var panel = document.getElementById(DASHBOARD_VIEWS[j] + 'View');
+            if (panel) {{ panel.hidden = DASHBOARD_VIEWS[j] !== normalized; }}
+        }}
+    }} else {{
+        prevPanel.classList.add('view-fade-out');
+        window.setTimeout(function() {{
+            prevPanel.hidden = true;
+            prevPanel.classList.remove('view-fade-out');
+            nextPanel.hidden = false;
+            nextPanel.classList.add('view-fade-in');
+            requestAnimationFrame(function() {{
+                requestAnimationFrame(function() {{ nextPanel.classList.remove('view-fade-in'); }});
+            }});
+        }}, 180);
+    }}
+    currentDashboardView = normalized;
+    moveTabThumb(normalized, !animate);
+    try {{ localStorage.setItem('wafDashboardView', normalized); }} catch (e) {{}}
+}}
+window.addEventListener('resize', function() {{ moveTabThumb(currentDashboardView, true); }});
 (function() {{
     setTheme(document.documentElement.getAttribute('data-theme') || 'light', false);
     var saved = 'en';
@@ -1927,7 +3001,7 @@ function setDashboardView(view) {{
     setLang(saved);
     var savedView = 'overview';
     try {{ savedView = localStorage.getItem('wafDashboardView') || 'overview'; }} catch (e) {{}}
-    setDashboardView(savedView === 'security' ? 'security' : 'overview');
+    setDashboardView(savedView, false);
 }})();
 </script>
 </body>
@@ -1977,7 +3051,7 @@ def main():
     generator = DashboardGenerator(engine, data, base_dir)
     html = generator.generate()
     
-    output_path = os.path.join(base_dir, "06_Dashboard", "WAF_Dashboard.html")
+    output_path = os.path.join(base_dir, "07_Dashboard", "WAF_Dashboard.html")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)

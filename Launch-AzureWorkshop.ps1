@@ -9,20 +9,27 @@
       3. Invoke-AzureMetrics-CloudShell.ps1         (Right-sizing & reliability)
       4. Invoke-AzureGovernanceViz-CloudShell.ps1   (Governance + HTML report)
     5. Invoke-AzureSecurity-CloudShell.ps1        (Defender posture + incidents)
-    6. generate-dashboard.py                      (Consolidated dashboard + action items)
+    6. Invoke-AzureChecklists-CloudShell.ps1      (Azure/review-checklists ARG compliance)
+    7. generate-dashboard.py                      (Consolidated dashboard + action items)
     
     All outputs are consolidated into a single timestamped folder
     created alongside the scripts.
 
 .PARAMETER OutputDir
-    Base output directory. Defaults to a timestamped folder alongside the scripts.
+    Base output directory. Defaults to "AzureWorkshop" alongside the scripts. If that
+    folder already exists from a previous run, it is wiped and recreated (see -KeepPrevious).
 
 .PARAMETER SkipMetrics
     Skip the metrics script (it is slower, queries per-resource). Use if short on time.
 
+.PARAMETER KeepPrevious
+    Archive an existing output folder (rename with a timestamp suffix) instead of
+    deleting it before the run.
+
 .EXAMPLE
     ./Launch-AzureWorkshop.ps1
     ./Launch-AzureWorkshop.ps1 -SkipMetrics
+    ./Launch-AzureWorkshop.ps1 -KeepPrevious
 
 .NOTES
     Run in Azure Cloud Shell (PowerShell) or locally with Az modules installed.
@@ -31,19 +38,35 @@
 [CmdletBinding()]
 param(
     [string]$OutputDir,
-    [switch]$SkipMetrics
+    [switch]$SkipMetrics,
+    # By default each run wipes the previous output folder. Pass -KeepPrevious to
+    # archive it (renamed with a timestamp suffix) instead of deleting it.
+    [switch]$KeepPrevious,
+    # Skip the interactive Microsoft Graph sign-in for Defender XDR incidents/alerts
+    # during the Security phase (keeps Defender for Cloud CSPM + Endpoint data).
+    [switch]$SkipGraphSecurity
 )
 
 $ErrorActionPreference = 'Continue'
-$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 
 if (-not $OutputDir) {
-    $OutputDir = Join-Path $scriptDir "AzureWorkshop_$timestamp"
+    $OutputDir = Join-Path $scriptDir "AzureWorkshop"
 }
 if ($OutputDir -match '(?i)[\\/]OneDrive(?: - [^\\/]+)?[\\/]') {
     Write-Warning "OneDrive may automatically encrypt generated workbooks while they are being written. If dashboard inputs come back unreadable, pause OneDrive sync for this folder during the run or re-run with -OutputDir pointing outside OneDrive."
+}
+
+if (Test-Path $OutputDir) {
+    if ($KeepPrevious) {
+        $archived = "$OutputDir" + "_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+        Write-Host "Archiving previous run to $archived" -ForegroundColor Yellow
+        Rename-Item -Path $OutputDir -NewName (Split-Path $archived -Leaf)
+    } else {
+        Write-Host "Removing previous run at $OutputDir ..." -ForegroundColor Yellow
+        Remove-Item -Path $OutputDir -Recurse -Force
+    }
 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -52,7 +75,8 @@ New-Item -ItemType Directory -Path "$OutputDir/02_Advisor" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/03_Metrics" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/04_Governance" -Force | Out-Null
 New-Item -ItemType Directory -Path "$OutputDir/05_Security" -Force | Out-Null
-New-Item -ItemType Directory -Path "$OutputDir/06_Dashboard" -Force | Out-Null
+New-Item -ItemType Directory -Path "$OutputDir/06_Checklists" -Force | Out-Null
+New-Item -ItemType Directory -Path "$OutputDir/07_Dashboard" -Force | Out-Null
 
 # --- Ensure modules ---
 Write-Host "Checking prerequisites..." -ForegroundColor Yellow
@@ -138,11 +162,12 @@ function Invoke-PhaseWithValidation {
         [string]$ScriptPath,
         [string]$OutputFolder,
         [int]$MaxAttempts = 3,
-        [switch]$RequireWorkbook
+        [switch]$RequireWorkbook,
+        [hashtable]$ScriptArgs = @{}
     )
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
-            & $ScriptPath *>&1 | ForEach-Object { Write-Host $_ }
+            & $ScriptPath @ScriptArgs *>&1 | ForEach-Object { Write-Host $_ }
         } catch {
             Write-Host "  $Name error: $($_.Exception.Message)" -ForegroundColor Yellow
         }
@@ -175,43 +200,49 @@ function Invoke-PhaseWithValidation {
 }
 
 # === PHASE 1: Resource Discovery ===
-Write-Host " PHASE 1/6: Resource Discovery" -ForegroundColor Cyan
+Write-Host " PHASE 1/7: Resource Discovery" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/01_Discovery"
 Invoke-PhaseWithValidation -Name "Discovery" -ScriptPath "$scriptDir/Invoke-AzureDiscovery-CloudShell.ps1" -OutputFolder "$OutputDir/01_Discovery"
 
 # === PHASE 2: Advisor Recommendations ===
-Write-Host "`n PHASE 2/6: Advisor Recommendations" -ForegroundColor Cyan
+Write-Host "`n PHASE 2/7: Advisor Recommendations" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/02_Advisor"
 Invoke-PhaseWithValidation -Name "Advisor" -ScriptPath "$scriptDir/Invoke-AzureAdvisor-CloudShell.ps1" -OutputFolder "$OutputDir/02_Advisor"
 
 # === PHASE 3: Metrics (Right-Sizing) ===
 if (-not $SkipMetrics) {
-    Write-Host "`n PHASE 3/6: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
+    Write-Host "`n PHASE 3/7: Metrics & Right-Sizing (this takes longer)" -ForegroundColor Cyan
     $env:AZWORKSHOP_OUTPUT = "$OutputDir/03_Metrics"
     Invoke-PhaseWithValidation -Name "Metrics" -ScriptPath "$scriptDir/Invoke-AzureMetrics-CloudShell.ps1" -OutputFolder "$OutputDir/03_Metrics"
 } else {
-    Write-Host "`n PHASE 3/6: Metrics - SKIPPED" -ForegroundColor DarkYellow
+    Write-Host "`n PHASE 3/7: Metrics - SKIPPED" -ForegroundColor DarkYellow
 }
 
 # === PHASE 4: Governance Visualization ===
-Write-Host "`n PHASE 4/6: Governance Visualization" -ForegroundColor Cyan
+Write-Host "`n PHASE 4/7: Governance Visualization" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/04_Governance"
 Invoke-PhaseWithValidation -Name "Governance" -ScriptPath "$scriptDir/Invoke-AzureGovernanceViz-CloudShell.ps1" -OutputFolder "$OutputDir/04_Governance"
 
 # === PHASE 5: Security Assessment ===
-Write-Host "`n PHASE 5/6: Security Assessment" -ForegroundColor Cyan
+Write-Host "`n PHASE 5/7: Security Assessment" -ForegroundColor Cyan
 $env:AZWORKSHOP_OUTPUT = "$OutputDir/05_Security"
-Invoke-PhaseWithValidation -Name "Security" -ScriptPath "$scriptDir/Invoke-AzureSecurity-CloudShell.ps1" -OutputFolder "$OutputDir/05_Security" -RequireWorkbook
+$securityArgs = if ($SkipGraphSecurity) { @{ SkipGraphSecurity = $true } } else { @{} }
+Invoke-PhaseWithValidation -Name "Security" -ScriptPath "$scriptDir/Invoke-AzureSecurity-CloudShell.ps1" -OutputFolder "$OutputDir/05_Security" -RequireWorkbook -ScriptArgs $securityArgs
 
-# === PHASE 6: Consolidated Dashboard ===
-Write-Host "`n PHASE 6/6: Generating Consolidated Dashboard" -ForegroundColor Cyan
+# === PHASE 6: Review Checklists (Azure/review-checklists ARG compliance) ===
+Write-Host "`n PHASE 6/7: Review Checklists (community WAF checks)" -ForegroundColor Cyan
+$env:AZWORKSHOP_OUTPUT = "$OutputDir/06_Checklists"
+Invoke-PhaseWithValidation -Name "Checklists" -ScriptPath "$scriptDir/Invoke-AzureChecklists-CloudShell.ps1" -OutputFolder "$OutputDir/06_Checklists"
+
+# === PHASE 7: Consolidated Dashboard ===
+Write-Host "`n PHASE 7/7: Generating Consolidated Dashboard" -ForegroundColor Cyan
 if ($pythonCmd) {
     try {
         & $pythonCmd @pythonArgs "$scriptDir/generate-dashboard.py" $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             throw "Dashboard generator exited with code $LASTEXITCODE"
         }
-        Write-Host "  Dashboard generated in $OutputDir/06_Dashboard/" -ForegroundColor Green
+        Write-Host "  Dashboard generated in $OutputDir/07_Dashboard/" -ForegroundColor Green
     } catch {
         Write-Host "  Dashboard generation failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
@@ -232,4 +263,5 @@ Write-Host "  02_Advisor/      - Advisor recommendations (Excel)" -ForegroundCol
 Write-Host "  03_Metrics/      - Right-sizing analysis (Excel)" -ForegroundColor White
 Write-Host "  04_Governance/   - Governance report (HTML + Excel)" -ForegroundColor White
 Write-Host "  05_Security/     - Security posture and operations (Excel)" -ForegroundColor White
-Write-Host "  06_Dashboard/    - Consolidated dashboard (HTML)" -ForegroundColor White
+Write-Host "  06_Checklists/   - Azure/review-checklists ARG compliance (Excel)" -ForegroundColor White
+Write-Host "  07_Dashboard/    - Consolidated dashboard (HTML)" -ForegroundColor White
