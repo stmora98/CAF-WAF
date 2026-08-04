@@ -19,6 +19,7 @@ import sys
 import os
 import json
 import re
+import hashlib
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -381,14 +382,53 @@ class InsightEngine:
 
     @staticmethod
     def _data_rows(rows: list) -> list:
-        """Exclude sentinel rows emitted when a workbook query returns no data."""
-        empty_results = {"no data found", "no resources found"}
+        """Exclude sentinel rows emitted when a workbook query returns no data (e.g. Result:
+        'No resources found'/'No recommendations' — the sentinel text varies by export script,
+        so any truthy Result value is treated as empty, matching the view-layer real_rows() filter)."""
         return [
             row for row in rows
-            if str(row.get("Result", row.get("result", ""))).strip().lower() not in empty_results
+            if not row.get("Result", row.get("result", ""))
             and str(row.get("DataStatus", "")).strip().lower() != "nodata"
         ]
-    
+
+    def _expand_advisor_items(self, recs: list, pillar: str, savings_field: str = None,
+                              savings_currency_field: str = "savingsCurrency") -> None:
+        """Turn raw Advisor rows into one action item per distinct problem (grounded in the
+        actual problem/solution text and impacted resources), instead of a single opaque count."""
+        recs = self._data_rows(recs)
+        if not recs:
+            return
+        groups = {}
+        for r in recs:
+            problem = str(r.get("problem", "")).strip() or f"{pillar} recommendation"
+            groups.setdefault(problem, []).append(r)
+        severity_rank = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+        for problem, rows in groups.items():
+            impacts = [str(r.get("impact", "")).strip().lower() for r in rows]
+            severity = max((i for i in impacts if i in severity_rank), key=lambda i: severity_rank[i], default="medium")
+            solution = next((str(r.get("solution", "")).strip() for r in rows if r.get("solution")), "")
+            resources = [str(r.get("impactedResource", r.get("impactedValue", ""))) for r in rows
+                         if r.get("impactedResource") or r.get("impactedValue")]
+            count = len(rows)
+            title = f"{count} resource(s) affected: {problem}" if count > 1 else problem
+            desc = solution or "Azure Advisor identified this issue for the impacted resource(s)."
+            desc_es = solution or "Azure Advisor identificó este problema para los recursos afectados."
+            if savings_field:
+                total = sum(float(r.get(savings_field, 0) or 0) for r in rows)
+                currency = next((r.get(savings_currency_field) for r in rows if r.get(savings_currency_field)), "USD")
+                if total > 0:
+                    desc += f" Estimated annual savings: ~{total:,.0f} {currency}."
+                    desc_es += f" Ahorro anual estimado: ~{total:,.0f} {currency}."
+            self.action_items.append({
+                "pillar": pillar,
+                "severity": severity,
+                "title": title[:140],
+                "title_es": title[:140],
+                "description": desc,
+                "description_es": desc_es,
+                "resources": resources[:10]
+            })
+
     def analyze(self):
         """Run all analysis passes."""
         self._analyze_reliability()
@@ -496,17 +536,7 @@ class InsightEngine:
         
         # Advisor HighAvailability recommendations
         ha_recs = self.data.get("advisor", {}).get("Reliability", [])
-        high_impact_ha = [r for r in ha_recs if str(r.get("impact", "")).lower() == "high"]
-        if high_impact_ha:
-            self.action_items.append({
-                "pillar": "Reliability",
-                "severity": "high",
-                "title": f"{len(high_impact_ha)} High-Impact Reliability recommendations from Advisor",
-                "title_es": f"{len(high_impact_ha)} Recomendaciones de Confiabilidad de alto impacto de Advisor",
-                "description": "Azure Advisor has identified critical reliability improvements.",
-                "description_es": "Azure Advisor identificó mejoras críticas de confiabilidad.",
-                "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in high_impact_ha[:10]]
-            })
+        self._expand_advisor_items(ha_recs, "Reliability")
 
         buckets = AdvisorScoreModel.merge_buckets(
             AdvisorScoreModel.bucket(ha_recs, AdvisorScoreModel.RELIABILITY_RULES),
@@ -580,16 +610,7 @@ class InsightEngine:
         
         # Security advisor recommendations (informational — already reflected in Secure Score)
         sec_recs = self._data_rows(self.data.get("advisor", {}).get("Security", []))
-        if sec_recs:
-            self.action_items.append({
-                "pillar": "Security",
-                "severity": "medium",
-                "title": f"{len(sec_recs)} Security recommendations from Advisor",
-                "title_es": f"{len(sec_recs)} Recomendaciones de seguridad de Advisor",
-                "description": "Review Azure Advisor security findings and remediate.",
-                "description_es": "Revise los hallazgos de seguridad de Azure Advisor y corríjalos.",
-                "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in sec_recs[:10]]
-            })
+        self._expand_advisor_items(sec_recs, "Security")
         
         # Broad-scope Owner/Contributor role assignments (RBAC hygiene, informational)
         OWNER_ROLE_ID = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
@@ -877,21 +898,7 @@ class InsightEngine:
                 "unit": "recommendations",
                 "affected": len(keys),
             })
-            total_savings = sum(float(r.get("annualSavings", r.get("savingsAmount", 0)) or 0) for r in cost_recs)
-            desc = "Azure Advisor estimates potential savings."
-            desc_es = "Azure Advisor estima posibles ahorros."
-            if total_savings > 0:
-                desc = f"Azure Advisor estimates ~${total_savings:,.0f} in potential annual savings."
-                desc_es = f"Azure Advisor estima ~${total_savings:,.0f} en posibles ahorros anuales."
-            self.action_items.append({
-                "pillar": "Cost Optimization",
-                "severity": "high",
-                "title": f"{len(cost_recs)} Cost optimization recommendations",
-                "title_es": f"{len(cost_recs)} Recomendaciones de optimización de costos",
-                "description": desc,
-                "description_es": desc_es,
-                "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in cost_recs[:10]]
-            })
+            self._expand_advisor_items(cost_recs, "Cost Optimization", savings_field="annualSavings")
 
         # Reservation / Savings Plan recommendations (rate optimization). Informational only -
         # these are opportunities on already-healthy resources, so they don't affect the score,
@@ -1013,16 +1020,7 @@ class InsightEngine:
         
         # OpEx Advisor recommendations
         opex_recs = self.data.get("advisor", {}).get("OperationalExcellence", [])
-        if opex_recs:
-            self.action_items.append({
-                "pillar": "Operational Excellence",
-                "severity": "medium",
-                "title": f"{len(opex_recs)} Operational Excellence recommendations from Advisor",
-                "title_es": f"{len(opex_recs)} Recomendaciones de Excelencia Operativa de Advisor",
-                "description": "Azure Advisor has identified operational improvements.",
-                "description_es": "Azure Advisor identificó mejoras operativas.",
-                "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in opex_recs[:10]]
-            })
+        self._expand_advisor_items(opex_recs, "Operational Excellence")
 
         buckets = AdvisorScoreModel.merge_buckets(
             AdvisorScoreModel.bucket(opex_recs, AdvisorScoreModel.OPERATIONAL_RULES),
@@ -1071,16 +1069,7 @@ class InsightEngine:
         
         # Performance advisor recommendations
         perf_recs = self.data.get("advisor", {}).get("Performance", [])
-        if perf_recs:
-            self.action_items.append({
-                "pillar": "Performance Efficiency",
-                "severity": "medium",
-                "title": f"{len(perf_recs)} Performance recommendations from Advisor",
-                "title_es": f"{len(perf_recs)} Recomendaciones de Rendimiento de Advisor",
-                "description": "Azure Advisor has identified performance improvements.",
-                "description_es": "Azure Advisor identificó mejoras de rendimiento.",
-                "resources": [r.get("impactedResource", r.get("impactedValue", "")) for r in perf_recs[:10]]
-            })
+        self._expand_advisor_items(perf_recs, "Performance Efficiency")
 
         buckets = AdvisorScoreModel.merge_buckets(
             AdvisorScoreModel.bucket(perf_recs, AdvisorScoreModel.PERFORMANCE_RULES),
@@ -1336,6 +1325,10 @@ class DashboardGenerator:
                 <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad')}</h3>{endpoint_recommendations_table}</div>
                 <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
             </div>
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Action items', 'Elementos de acción')}</div>
+            {self._render_actions_for_pillar("Security")}
         </div>"""
 
     def _render_governance_view(self) -> str:
@@ -1806,33 +1799,55 @@ class DashboardGenerator:
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Reservation and Savings Plan opportunities', 'Oportunidades de Reservas y Planes de Ahorro')}</div>
             {reservation_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Action items', 'Elementos de acción')}</div>
+            {self._render_actions_for_pillar("Cost Optimization")}
         </div>"""
 
-    def _render_actions_for_pillar(self, pillar: str) -> str:
-        """Render the action-item cards for a single pillar (used by the dedicated pillar tabs)."""
-        items = [a for a in self.engine.action_items if a["pillar"] == pillar]
-        if not items:
-            return f'<p class="empty-state">{bi("No action items for this pillar.", "Sin elementos de acci\u00f3n para este pilar.")}</p>'
-        html = ""
-        for i, action in enumerate(items, 1):
-            color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "var(--cp-text-muted)")
-            resources_html = ""
-            if action.get("resources"):
-                resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
-            severity_badge = bi(action['severity'].upper(), SEVERITY_ES.get(action['severity'], action['severity'].upper()))
-            title_text = bi(action['title'], action.get('title_es', action['title']))
-            desc_text = bi(action['description'], action.get('description_es', action['description']))
-            html += f"""
-            <div class="action-item" style="border-left: 4px solid {color};">
+    @staticmethod
+    def _action_item_id(action: dict) -> str:
+        """Stable id derived from pillar+title so dismiss state survives re-running the generator
+        against the same scan data (the action_items list itself isn't guaranteed stable across runs)."""
+        basis = f"{action.get('pillar', '')}|{action.get('title', '')}"
+        return hashlib.md5(basis.encode("utf-8")).hexdigest()[:12]
+
+    def _render_action_card(self, action: dict, index, show_pillar: bool = True) -> str:
+        """Render a single action-item card with a dismiss checkbox (dismiss/custom state is
+        persisted client-side via localStorage, see the action-item JS in generate())."""
+        color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "var(--cp-text-muted)")
+        resources_html = ""
+        if action.get("resources"):
+            resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
+        severity_badge = bi(action['severity'].upper(), SEVERITY_ES.get(action['severity'], action['severity'].upper()))
+        pillar_tag_html = ""
+        if show_pillar:
+            pillar_tag_html = f"<span class='pillar-tag'>{bi(action['pillar'], PILLAR_ES.get(action['pillar'], action['pillar']))}</span>"
+        title_text = bi(action['title'], action.get('title_es', action['title']))
+        desc_text = bi(action['description'], action.get('description_es', action['description']))
+        item_id = self._action_item_id(action)
+        return f"""
+            <div class="action-item" data-item-id="{item_id}" data-pillar="{escape(action['pillar'])}" data-severity="{action['severity']}" style="border-left: 4px solid {color};">
                 <div class="action-header">
-                    <span class="action-num">#{i}</span>
+                    <label class="action-check-wrap" title="Dismiss / Descartar">
+                        <input type="checkbox" class="action-check" data-item-id="{item_id}">
+                    </label>
+                    <span class="action-num">#{index}</span>
                     <span class="severity-badge" style="background:{color};">{severity_badge}</span>
+                    {pillar_tag_html}
                     <span class="action-title">{title_text}</span>
                 </div>
                 <p class="action-desc">{desc_text}</p>
                 {resources_html}
             </div>"""
-        return html
+
+    def _render_actions_for_pillar(self, pillar: str) -> str:
+        """Render the action-item cards for a single pillar (used by the dedicated pillar tabs)."""
+        items = [a for a in self.engine.action_items if a["pillar"] == pillar]
+        if not items:
+            return f'<div class="action-list" data-pillar="{escape(pillar)}"><p class="empty-state">{bi("No action items for this pillar.", "Sin elementos de acci\u00f3n para este pilar.")}</p></div>'
+        cards = "".join(self._render_action_card(action, i, show_pillar=False) for i, action in enumerate(items, 1))
+        return f'<div class="action-list" data-pillar="{escape(pillar)}">{cards}</div>'
 
     def _render_subcategory_table(self, pillar: str) -> str:
         """Render the subcategory weight/health breakdown table for a single pillar (used by the dedicated pillar tabs)."""
@@ -2338,28 +2353,7 @@ class DashboardGenerator:
         critical_actions = len([a for a in action_items if a["severity"] in ("critical", "high")])
         
         # Build action items HTML
-        actions_html = ""
-        for i, action in enumerate(action_items, 1):
-            color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "var(--cp-text-muted)")
-            resources_html = ""
-            if action.get("resources"):
-                resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
-            
-            severity_badge = bi(action['severity'].upper(), SEVERITY_ES.get(action['severity'], action['severity'].upper()))
-            pillar_tag = bi(action['pillar'], PILLAR_ES.get(action['pillar'], action['pillar']))
-            title_text = bi(action['title'], action.get('title_es', action['title']))
-            desc_text = bi(action['description'], action.get('description_es', action['description']))
-            actions_html += f"""
-            <div class="action-item" style="border-left: 4px solid {color};">
-                <div class="action-header">
-                    <span class="action-num">#{i}</span>
-                    <span class="severity-badge" style="background:{color};">{severity_badge}</span>
-                    <span class="pillar-tag">{pillar_tag}</span>
-                    <span class="action-title">{title_text}</span>
-                </div>
-                <p class="action-desc">{desc_text}</p>
-                {resources_html}
-            </div>"""
+        actions_html = "".join(self._render_action_card(action, i, show_pillar=True) for i, action in enumerate(action_items, 1))
         
         # Build pillar score cards
         pillar_cards = ""
@@ -2732,6 +2726,58 @@ body {{
 }}
 .resource-list li {{ margin: 2px 0; }}
 
+/* Action item toolbar / add form / dismiss */
+.section-title-row {{ display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid var(--cp-accent); }}
+.action-toolbar {{ display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }}
+.btn-add-action {{
+    background: var(--cp-accent); color: var(--cp-accent-fg); border: 0; border-radius: 980px;
+    padding: 7px 16px; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: opacity 0.15s var(--cp-ease);
+}}
+.btn-add-action:hover {{ opacity: 0.85; }}
+.btn-link {{
+    background: transparent; border: 0; color: var(--cp-link); font-size: 12.5px; font-weight: 590;
+    cursor: pointer; padding: 4px 2px;
+}}
+.btn-link:hover {{ text-decoration: underline; }}
+.action-check-wrap {{ display: inline-flex; align-items: center; cursor: pointer; }}
+.action-check {{ width: 16px; height: 16px; cursor: pointer; accent-color: var(--cp-accent); }}
+.action-item.is-dismissed {{ opacity: 0.5; }}
+.action-item.is-dismissed .action-title {{ text-decoration: line-through; }}
+.action-item[data-custom="true"] {{ border-style: dashed; }}
+.action-form {{
+    background: var(--cp-surface-soft); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md);
+    padding: 16px; margin-bottom: 16px; display: none; grid-template-columns: 1fr 1fr; gap: 12px;
+}}
+.action-form.is-open {{ display: grid; }}
+.action-form-field {{ display: flex; flex-direction: column; gap: 4px; }}
+.action-form-field.full {{ grid-column: 1 / -1; }}
+.action-form-field label {{ font-size: 11px; font-weight: 600; color: var(--cp-text-muted); text-transform: uppercase; }}
+.action-form-field input, .action-form-field select, .action-form-field textarea {{
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 8px;
+    padding: 8px 10px; font: inherit; font-size: 13px; color: var(--cp-text); resize: vertical;
+}}
+.action-form-actions {{ grid-column: 1 / -1; display: flex; gap: 10px; justify-content: flex-end; }}
+.action-form-actions button {{ border-radius: 980px; padding: 7px 18px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 0; }}
+.severity-filter-bar {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }}
+.severity-filter-label {{ font-size: 12px; font-weight: 600; color: var(--cp-text-muted); margin-right: 2px; }}
+.severity-chip {{
+    --chip-color: var(--cp-text-muted);
+    background: var(--cp-surface); border: 1px solid var(--cp-border); color: var(--cp-text);
+    border-radius: 980px; padding: 5px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s var(--cp-ease); position: relative;
+}}
+.severity-chip::before {{
+    content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--chip-color); margin-right: 6px; vertical-align: middle;
+}}
+.severity-chip[data-severity="all"]::before {{ display: none; }}
+.severity-chip:hover {{ border-color: var(--chip-color); }}
+.severity-chip.is-active {{ background: var(--chip-color); border-color: var(--chip-color); color: var(--cp-accent-fg); }}
+.severity-chip[data-severity="all"].is-active {{ background: var(--cp-accent); border-color: var(--cp-accent); }}
+.action-item.is-severity-hidden {{ display: none !important; }}
+.action-form-save {{ background: var(--cp-accent); color: var(--cp-accent-fg); }}
+.action-form-cancel {{ background: var(--cp-surface); border: 1px solid var(--cp-border); color: var(--cp-text); }}
+
 /* Tables */
 .data-grid {{
     display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;
@@ -2819,8 +2865,8 @@ body.lang-es .i18n-es {{ display: inline; }}
 <div class="stats-row">
     <div class="stat-box"><div class="value">{total_subs}</div><div class="label">{bi("Subscriptions", "Suscripciones")}</div></div>
     <div class="stat-box"><div class="value">{total_resources:,}</div><div class="label">{bi("Total Resources", "Recursos Totales")}</div></div>
-    <div class="stat-box"><div class="value">{total_actions}</div><div class="label">{bi("Action Items", "Elementos de Acci\u00f3n")}</div></div>
-    <div class="stat-box"><div class="value" style="color:var(--cp-danger);">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta")}</div></div>
+    <div class="stat-box"><div class="value" id="totalActionsStat">{total_actions}</div><div class="label">{bi("Action Items", "Elementos de Acci\u00f3n")}</div></div>
+    <div class="stat-box"><div class="value" id="criticalActionsStat" style="color:var(--cp-danger);">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta")}</div></div>
 </div>
 
 <!-- Score Methodology -->
@@ -2848,8 +2894,68 @@ body.lang-es .i18n-es {{ display: inline; }}
 
 <!-- Action Items -->
 <div class="section">
-    <div class="section-title">🎯 {bi(f"Action Items ({total_actions})", f"Elementos de Acci\u00f3n ({total_actions})")}</div>
+    <div class="section-title-row">
+        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">🎯 {bi('Action Items', 'Elementos de Acci\u00f3n')} (<span id="actionItemsCount">{total_actions}</span>)</div>
+        <div class="action-toolbar">
+            <button id="addActionBtn" class="btn-add-action" type="button">+ {bi('Add action item', 'Agregar elemento')}</button>
+            <button id="toggleDismissedBtn" class="btn-link" type="button"
+                    data-show-en="Show dismissed" data-show-es="Mostrar descartados"
+                    data-hide-en="Hide dismissed" data-hide-es="Ocultar descartados">
+                <span class="i18n-en toggle-label">Show dismissed</span><span class="i18n-es toggle-label">Mostrar descartados</span> (<span class="dismissed-count">0</span>)
+            </button>
+        </div>
+    </div>
+    <div id="severityFilterBar" class="severity-filter-bar">
+        <span class="severity-filter-label">{bi('Filter by severity:', 'Filtrar por severidad:')}</span>
+        <button type="button" class="severity-chip is-active" data-severity="all">{bi('All', 'Todos')}</button>
+        <button type="button" class="severity-chip" data-severity="critical" style="--chip-color: var(--cp-danger);">{bi('Critical', 'Cr\u00edtico')}</button>
+        <button type="button" class="severity-chip" data-severity="high" style="--chip-color: var(--cp-danger);">{bi('High', 'Alto')}</button>
+        <button type="button" class="severity-chip" data-severity="medium" style="--chip-color: var(--cp-warning);">{bi('Medium', 'Medio')}</button>
+        <button type="button" class="severity-chip" data-severity="low" style="--chip-color: var(--cp-link);">{bi('Low', 'Bajo')}</button>
+        <button type="button" class="severity-chip" data-severity="info" style="--chip-color: var(--cp-success);">{bi('Info', 'Info')}</button>
+    </div>
+    <div id="addActionForm" class="action-form">
+        <div class="action-form-field full">
+            <label>{bi('Title', 'T\u00edtulo')}</label>
+            <input type="text" id="newActionTitle" placeholder="e.g. Rotate storage account access keys">
+        </div>
+        <div class="action-form-field full">
+            <label>{bi('Description', 'Descripci\u00f3n')}</label>
+            <textarea id="newActionDesc" rows="2"></textarea>
+        </div>
+        <div class="action-form-field">
+            <label>{bi('Pillar', 'Pilar')}</label>
+            <select id="newActionPillar">
+                <option value="Reliability">Reliability</option>
+                <option value="Security">Security</option>
+                <option value="Cost Optimization">Cost Optimization</option>
+                <option value="Operational Excellence">Operational Excellence</option>
+                <option value="Performance Efficiency">Performance Efficiency</option>
+                <option value="Governance">Governance</option>
+            </select>
+        </div>
+        <div class="action-form-field">
+            <label>{bi('Severity', 'Severidad')}</label>
+            <select id="newActionSeverity">
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium" selected>Medium</option>
+                <option value="low">Low</option>
+                <option value="info">Info</option>
+            </select>
+        </div>
+        <div class="action-form-field full">
+            <label>{bi('Resources (comma-separated)', 'Recursos (separados por coma)')}</label>
+            <input type="text" id="newActionResources" placeholder="vm-prod-01, storageacct123">
+        </div>
+        <div class="action-form-actions">
+            <button type="button" id="cancelActionBtn" class="action-form-cancel">{bi('Cancel', 'Cancelar')}</button>
+            <button type="button" id="saveActionBtn" class="action-form-save">{bi('Save', 'Guardar')}</button>
+        </div>
+    </div>
+    <div id="actionsListAll" class="action-list" data-pillar="all">
     {actions_html}
+    </div>
 </div>
 
 <!-- Data Summary Tables -->
@@ -2994,6 +3100,204 @@ function setDashboardView(view, animate) {{
     try {{ localStorage.setItem('wafDashboardView', normalized); }} catch (e) {{}}
 }}
 window.addEventListener('resize', function() {{ moveTabThumb(currentDashboardView, true); }});
+
+/* ---- Action items: dismiss (persisted) + manually-added custom items (client-side only, localStorage) ---- */
+var ACTION_DISMISSED_KEY = 'wafDismissedActions';
+var ACTION_CUSTOM_KEY = 'wafCustomActions';
+var SEVERITY_COLORS_JS = {{"critical": "var(--cp-danger)", "high": "var(--cp-danger)", "medium": "var(--cp-warning)", "low": "var(--cp-link)", "info": "var(--cp-success)"}};
+var PILLAR_NAMES_ES = {{"Reliability": "Confiabilidad", "Security": "Seguridad", "Cost Optimization": "Optimizaci\u00f3n de Costos", "Operational Excellence": "Excelencia Operativa", "Performance Efficiency": "Eficiencia de Rendimiento", "Governance": "Gobernanza"}};
+var showDismissedActions = false;
+
+function loadJsonList(key) {{
+    try {{ return JSON.parse(localStorage.getItem(key) || '[]'); }} catch (e) {{ return []; }}
+}}
+function saveJsonList(key, arr) {{
+    try {{ localStorage.setItem(key, JSON.stringify(arr)); }} catch (e) {{}}
+}}
+
+function updateActionCounters() {{
+    var allCards = document.querySelectorAll('#actionsListAll .action-item');
+    var visibleCount = 0, criticalCount = 0;
+    allCards.forEach(function(card) {{
+        if (card.style.display === 'none') return;
+        visibleCount++;
+        var badge = card.querySelector('.severity-badge');
+        if (badge && /HIGH|CRITICAL/i.test(badge.textContent)) criticalCount++;
+    }});
+    var totalEl = document.getElementById('actionItemsCount');
+    var statTotal = document.getElementById('totalActionsStat');
+    var statCritical = document.getElementById('criticalActionsStat');
+    if (totalEl) totalEl.textContent = visibleCount;
+    if (statTotal) statTotal.textContent = visibleCount;
+    if (statCritical) statCritical.textContent = criticalCount;
+    var dismissed = loadJsonList(ACTION_DISMISSED_KEY);
+    document.querySelectorAll('.dismissed-count').forEach(function(el) {{ el.textContent = dismissed.length; }});
+}}
+
+var activeSeverities = null; /* null = show all severities */
+
+function applyDismissedState() {{
+    var dismissed = loadJsonList(ACTION_DISMISSED_KEY);
+    document.querySelectorAll('.action-item[data-item-id]').forEach(function(card) {{
+        var isCustom = card.getAttribute('data-custom') === 'true';
+        var id = card.getAttribute('data-item-id');
+        var isDismissed = !isCustom && dismissed.indexOf(id) !== -1;
+        if (!isCustom) {{
+            var checkbox = card.querySelector('.action-check');
+            if (checkbox) checkbox.checked = isDismissed;
+            card.classList.toggle('is-dismissed', isDismissed);
+        }}
+        var severity = card.getAttribute('data-severity');
+        var severityHidden = !!activeSeverities && activeSeverities.indexOf(severity) === -1;
+        card.classList.toggle('is-severity-hidden', severityHidden);
+        card.style.display = ((isDismissed && !showDismissedActions) || severityHidden) ? 'none' : '';
+    }});
+    updateActionCounters();
+}}
+
+function applySeverityFilter(severity) {{
+    if (severity === 'all') {{
+        activeSeverities = null;
+    }} else {{
+        if (!activeSeverities) activeSeverities = [];
+        var idx = activeSeverities.indexOf(severity);
+        if (idx === -1) {{ activeSeverities.push(severity); }} else {{ activeSeverities.splice(idx, 1); }}
+        if (activeSeverities.length === 0) activeSeverities = null;
+    }}
+    document.querySelectorAll('.severity-chip').forEach(function(chip) {{
+        var chipSeverity = chip.getAttribute('data-severity');
+        var isActive = chipSeverity === 'all' ? !activeSeverities : (!!activeSeverities && activeSeverities.indexOf(chipSeverity) !== -1);
+        chip.classList.toggle('is-active', isActive);
+    }});
+    applyDismissedState();
+}}
+
+document.querySelectorAll('.severity-chip').forEach(function(chip) {{
+    chip.addEventListener('click', function() {{ applySeverityFilter(chip.getAttribute('data-severity')); }});
+}});
+
+function toggleDismiss(id, checked) {{
+    var dismissed = loadJsonList(ACTION_DISMISSED_KEY);
+    var idx = dismissed.indexOf(id);
+    if (checked && idx === -1) dismissed.push(id);
+    if (!checked && idx !== -1) dismissed.splice(idx, 1);
+    saveJsonList(ACTION_DISMISSED_KEY, dismissed);
+    applyDismissedState();
+}}
+
+function deleteCustomItem(id) {{
+    saveJsonList(ACTION_CUSTOM_KEY, loadJsonList(ACTION_CUSTOM_KEY).filter(function(item) {{ return item.id !== id; }}));
+    document.querySelectorAll('.action-item[data-item-id="' + id + '"]').forEach(function(card) {{ card.remove(); }});
+    updateActionCounters();
+}}
+
+document.addEventListener('change', function(e) {{
+    if (!e.target.classList || !e.target.classList.contains('action-check')) return;
+    var card = e.target.closest('.action-item');
+    var id = e.target.getAttribute('data-item-id');
+    if (card && card.getAttribute('data-custom') === 'true') {{
+        deleteCustomItem(id);
+    }} else {{
+        toggleDismiss(id, e.target.checked);
+    }}
+}});
+
+function buildActionCardHtml(item, showPillar) {{
+    var color = SEVERITY_COLORS_JS[item.severity] || 'var(--cp-text-muted)';
+    var pillarEs = PILLAR_NAMES_ES[item.pillar] || item.pillar;
+    var pillarHtml = showPillar
+        ? ('<span class="pillar-tag"><span class="i18n-en">' + item.pillar + '</span><span class="i18n-es">' + pillarEs + '</span></span>')
+        : '';
+    var resourcesHtml = '';
+    if (item.resources && item.resources.length) {{
+        resourcesHtml = '<ul class="resource-list">' + item.resources.map(function(r) {{ return '<li>' + r + '</li>'; }}).join('') + '</ul>';
+    }}
+    return '<div class="action-item" data-item-id="' + item.id + '" data-pillar="' + item.pillar + '" data-severity="' + item.severity + '" data-custom="true" style="border-left: 4px solid ' + color + ';">' +
+        '<div class="action-header">' +
+            '<label class="action-check-wrap" title="Remove"><input type="checkbox" class="action-check" data-item-id="' + item.id + '"></label>' +
+            '<span class="action-num">+</span>' +
+            '<span class="severity-badge" style="background:' + color + ';">' + item.severity.toUpperCase() + '</span>' +
+            pillarHtml +
+            '<span class="action-title">' + item.title + '</span>' +
+        '</div>' +
+        '<p class="action-desc">' + item.description + '</p>' +
+        resourcesHtml +
+        '</div>';
+}}
+
+function renderCustomItems() {{
+    loadJsonList(ACTION_CUSTOM_KEY).forEach(function(item) {{
+        var allList = document.getElementById('actionsListAll');
+        if (allList && !allList.querySelector('[data-item-id="' + item.id + '"]')) {{
+            allList.insertAdjacentHTML('afterbegin', buildActionCardHtml(item, true));
+        }}
+        var pillarList = document.querySelector('.action-list[data-pillar="' + item.pillar + '"]');
+        if (pillarList) {{
+            var emptyState = pillarList.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+            if (!pillarList.querySelector('[data-item-id="' + item.id + '"]')) {{
+                pillarList.insertAdjacentHTML('afterbegin', buildActionCardHtml(item, false));
+            }}
+        }}
+    }});
+    applyDismissedState();
+}}
+
+var addActionBtn = document.getElementById('addActionBtn');
+var addActionForm = document.getElementById('addActionForm');
+var cancelActionBtn = document.getElementById('cancelActionBtn');
+var saveActionBtn = document.getElementById('saveActionBtn');
+var toggleDismissedBtn = document.getElementById('toggleDismissedBtn');
+
+if (addActionBtn && addActionForm) {{
+    addActionBtn.addEventListener('click', function() {{ addActionForm.classList.toggle('is-open'); }});
+}}
+if (cancelActionBtn && addActionForm) {{
+    cancelActionBtn.addEventListener('click', function() {{
+        addActionForm.classList.remove('is-open');
+        addActionForm.querySelectorAll('input, textarea').forEach(function(el) {{ el.value = ''; }});
+    }});
+}}
+if (saveActionBtn && addActionForm) {{
+    saveActionBtn.addEventListener('click', function() {{
+        var titleEl = document.getElementById('newActionTitle');
+        var descEl = document.getElementById('newActionDesc');
+        var pillarEl = document.getElementById('newActionPillar');
+        var severityEl = document.getElementById('newActionSeverity');
+        var resourcesEl = document.getElementById('newActionResources');
+        var title = (titleEl.value || '').trim();
+        if (!title) {{ titleEl.focus(); return; }}
+        var item = {{
+            id: 'custom-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+            title: title,
+            description: (descEl.value || '').trim() || 'Manually added action item.',
+            pillar: pillarEl.value,
+            severity: severityEl.value,
+            resources: (resourcesEl.value || '').split(',').map(function(s) {{ return s.trim(); }}).filter(Boolean)
+        }};
+        var custom = loadJsonList(ACTION_CUSTOM_KEY);
+        custom.push(item);
+        saveJsonList(ACTION_CUSTOM_KEY, custom);
+        renderCustomItems();
+        addActionForm.classList.remove('is-open');
+        titleEl.value = ''; descEl.value = ''; resourcesEl.value = '';
+    }});
+}}
+function refreshDismissedToggleLabel() {{
+    if (!toggleDismissedBtn) return;
+    var enSpan = toggleDismissedBtn.querySelector('.i18n-en.toggle-label');
+    var esSpan = toggleDismissedBtn.querySelector('.i18n-es.toggle-label');
+    if (enSpan) enSpan.textContent = toggleDismissedBtn.getAttribute(showDismissedActions ? 'data-hide-en' : 'data-show-en');
+    if (esSpan) esSpan.textContent = toggleDismissedBtn.getAttribute(showDismissedActions ? 'data-hide-es' : 'data-show-es');
+}}
+if (toggleDismissedBtn) {{
+    toggleDismissedBtn.addEventListener('click', function() {{
+        showDismissedActions = !showDismissedActions;
+        refreshDismissedToggleLabel();
+        applyDismissedState();
+    }});
+}}
+
 (function() {{
     setTheme(document.documentElement.getAttribute('data-theme') || 'light', false);
     var saved = 'en';
@@ -3002,6 +3306,9 @@ window.addEventListener('resize', function() {{ moveTabThumb(currentDashboardVie
     var savedView = 'overview';
     try {{ savedView = localStorage.getItem('wafDashboardView') || 'overview'; }} catch (e) {{}}
     setDashboardView(savedView, false);
+    renderCustomItems();
+    applyDismissedState();
+    refreshDismissedToggleLabel();
 }})();
 </script>
 </body>
