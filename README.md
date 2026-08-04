@@ -10,6 +10,16 @@ Launch-AzureWorkshop.ps1 → generate-dashboard.py → WAF_Dashboard.html
 
 ## 🚀 Quick Start
 
+### Windows (double-click)
+
+1. Install [PowerShell 7](https://aka.ms/powershell) if it is not already available.
+2. Double-click [`Start-AzureWorkshop.cmd`](Start-AzureWorkshop.cmd).
+3. Complete the Azure sign-in prompts. Required PowerShell modules and Python's `openpyxl` package are installed automatically when missing.
+
+The launcher keeps its console open so you can review progress or errors, and opens `AzureWorkshop/07_Dashboard/WAF_Dashboard.html` when the workshop completes successfully.
+
+### Azure Cloud Shell
+
 ```powershell
 # 1. Upload all scripts to Azure Cloud Shell (PowerShell)
 
