@@ -63,15 +63,16 @@ class DashboardConfig:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BILINGUAL (EN/ES) SUPPORT
-# Both language variants are always rendered; CSS toggles visibility via the
-# .i18n-en/.i18n-es classes based on a "lang-es" class on <body> (see the
-# embedded <script> in DashboardGenerator.generate()).
+# TRILINGUAL (EN/ES/PT) SUPPORT
+# All three language variants are always rendered; CSS toggles visibility via the
+# .i18n-en/.i18n-es/.i18n-pt classes based on a "lang-es"/"lang-pt" class on <body>
+# (see the embedded <script> in DashboardGenerator.generate()).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def bi(en: str, es: str) -> str:
-    """Wrap a piece of text in both language variants for the client-side toggle."""
-    return f'<span class="i18n-en">{en}</span><span class="i18n-es">{es}</span>'
+def bi(en: str, es: str, pt: Optional[str] = None) -> str:
+    """Wrap a piece of text in all three language variants for the client-side toggle."""
+    pt = pt if pt is not None else en
+    return f'<span class="i18n-en">{en}</span><span class="i18n-es">{es}</span><span class="i18n-pt">{pt}</span>'
 
 
 def _cell_html(value) -> str:
@@ -90,6 +91,15 @@ PILLAR_ES = {
     "Performance Efficiency": "Eficiencia de Rendimiento",
 }
 
+PILLAR_PT = {
+    "Reliability": "Confiabilidade",
+    "Security": "Segurança",
+    "Cost Optimization": "Otimização de Custos",
+    "Operational Excellence": "Excelência Operacional",
+    "Performance Efficiency": "Eficiência de Desempenho",
+}
+
+
 SEVERITY_ES = {
     "critical": "CRÍTICO",
     "high": "ALTO",
@@ -97,6 +107,15 @@ SEVERITY_ES = {
     "low": "BAJO",
     "info": "INFO",
 }
+
+SEVERITY_PT = {
+    "critical": "CRÍTICO",
+    "high": "ALTO",
+    "medium": "MÉDIO",
+    "low": "BAIXO",
+    "info": "INFO",
+}
+
 
 SUBCATEGORY_ES = {
     "Zone Resiliency": "Resiliencia de Zona",
@@ -116,6 +135,25 @@ SUBCATEGORY_ES = {
     "Safe and Secure Deployment": "Implementación Segura",
 }
 
+SUBCATEGORY_PT = {
+    "Zone Resiliency": "Resiliência de Zona",
+    "Regional Resiliency": "Resiliência Regional",
+    "Data Protection and Recovery": "Proteção e Recuperação de Dados",
+    "Governance and Compliance": "Governança e Conformidade",
+    "Scalability": "Escalabilidade",
+    "Monitoring and Alerting": "Monitoramento e Alertas",
+    "Service Upgrade and Retirement": "Atualização e Descontinuação de Serviços",
+    "Other": "Outro",
+    "Compute Optimization": "Otimização de Computação",
+    "Storage Optimization": "Otimização de Armazenamento",
+    "Network Optimization": "Otimização de Rede",
+    "Data Performance": "Desempenho de Dados",
+    "Efficiency Optimization": "Otimização de Eficiência",
+    "Failure Mitigation": "Mitigação de Falhas",
+    "Safe and Secure Deployment": "Implantação Segura",
+}
+
+
 COST_SOURCE_ES = {
     "Orphaned/unused resources": "Recursos huérfanos/no utilizados",
     "Deallocated VMs": "VMs desasignadas",
@@ -123,7 +161,175 @@ COST_SOURCE_ES = {
     "Advisor Cost recommendations": "Recomendaciones de costos de Advisor",
 }
 
+COST_SOURCE_PT = {
+    "Orphaned/unused resources": "Recursos órfãos/não utilizados",
+    "Deallocated VMs": "VMs desalocadas",
+    "Idle/underutilized VMs": "VMs ociosas/subutilizadas",
+    "Advisor Cost recommendations": "Recomendações de custo do Advisor",
+}
 
+# Shared Portuguese translations for recurring table column headers / labels
+# used across the many render_table() closures throughout the file.
+LABEL_PT = {
+    "Severity": "Severidade",
+    "Recommendation": "Recomendação",
+    "State": "Estado",
+    "Affected Resource": "Recurso Afetado",
+    "Secure Score Control": "Controle do Secure Score",
+    "Healthy": "Saudáveis",
+    "Unhealthy": "Não saudáveis",
+    "Current Score": "Pontuação atual",
+    "Max Score": "Pontuação máxima",
+    "MCSB Control": "Controle MCSB",
+    "Assessment": "Avaliação",
+    "Passed": "Aprovados",
+    "Failed": "Com falha",
+    "Defender Plan": "Plano do Defender",
+    "Tier": "Nível",
+    "Sub-plan": "Subplano",
+    "Subscription": "Assinatura",
+    "Incident": "Incidente",
+    "Status": "Status",
+    "Assigned To": "Atribuído a",
+    "Last Updated": "Última atualização",
+    "Alert": "Alerta",
+    "Service": "Serviço",
+    "Endpoint Recommendation": "Recomendação de Endpoint",
+    "Exposed Machines": "Máquinas expostas",
+    "Severity Score": "Pontuação de severidade",
+    "CVE": "CVE",
+    "Public Exploit": "Exploit público",
+    "Key Vault": "Key Vault",
+    "Type": "Tipo",
+    "Item": "Item",
+    "Days Until Expiry": "Dias até expirar",
+    "Expires On": "Expira em",
+    "Application": "Aplicativo",
+    "Guest User": "Usuário convidado",
+    "Email": "E-mail",
+    "Created": "Criado",
+    "Enabled": "Habilitado",
+    "Name": "Nome",
+    "Id": "Id",
+    "Parent": "Pai",
+    "Enforcement": "Aplicação",
+    "Identity": "Identidade",
+    "Scope": "Escopo",
+    "Effect": "Efeito",
+    "Category": "Categoria",
+    "Policy Assignment": "Atribuição de Política",
+    "Non-Compliant": "Não Conformes",
+    "Principal Type": "Tipo de Principal",
+    "Role": "Função",
+    "Role Name": "Nome da Função",
+    "Description": "Descrição",
+    "Plan": "Plano",
+    "Score %": "Pontuação %",
+    "Resource Type": "Tipo de Recurso",
+    "Location": "Localização",
+    "Count": "Quantidade",
+    "Resource Group": "Grupo de Recursos",
+    "Detail": "Detalhe",
+    "VNet": "VNet",
+    "Address Space": "Espaço de Endereço",
+    "Subnets": "Sub-redes",
+    "Peerings": "Emparelhamentos",
+    "Level": "Nível",
+    "Impact": "Impacto",
+    "Problem": "Problema",
+    "Solution": "Solução",
+    "Annual Savings": "Economia Anual",
+    "SKU": "SKU",
+    "Term": "Prazo",
+    "Qty": "Qtd.",
+    "Net Savings/yr": "Economia Líquida/ano",
+    "VM": "VM",
+    "Size": "Tamanho",
+    "Avg CPU %": "CPU Média %",
+    "Max CPU %": "CPU Máx. %",
+    "Database": "Banco de Dados",
+    "Metric": "Métrica",
+    "Avg Usage %": "Uso Médio %",
+    "App Plan": "Plano de App",
+    "Workers": "Workers",
+    "Storage Account": "Conta de Armazenamento",
+    "Avg Daily Txns": "Trans. Diárias Médias",
+    "Size (GB)": "Tamanho (GB)",
+    "Month": "Mês",
+    "Cost": "Custo",
+    "6-mo Cost": "Custo 6 meses",
+    "Open Findings": "Descobertas Abertas",
+    "Top Severity": "Severidade Máxima",
+    "Top Issue": "Problema Principal",
+    "Check": "Verificação",
+    "Resource": "Recurso",
+    "Power State": "Estado de Energia",
+    "Backup Vault": "Vault de Backup",
+    "Workload": "Carga de Trabalho",
+    "Protection Status": "Estado de Proteção",
+    "Last Backup Status": "Último Status de Backup",
+    "Last Backup Time": "Última Hora de Backup",
+    "Policy": "Política",
+    "Event": "Evento",
+    "Impact Start": "Início do Impacto",
+    "Mitigated": "Mitigado",
+    "Gap": "Lacuna",
+}
+
+EMPTY_STATE_PT = {
+    "": "",
+    "All VMs are deployed across Availability Zones.": "Todas as VMs estão implantadas em Zonas de Disponibilidade.",
+    "All VNets have DDoS Protection enabled.": "Todas as VNets têm a Proteção contra DDoS habilitada.",
+    "All critical resources have diagnostic settings configured.": "Todos os recursos críticos têm configurações de diagnóstico definidas.",
+    "All resources are tagged.": "Todos os recursos têm tags.",
+    "No Advisor cost recommendations found.": "Nenhuma recomendação de custo do Advisor encontrada.",
+    "No Advisor operational excellence recommendations found.": "Nenhuma recomendação de excelência operacional do Advisor encontrada.",
+    "No Advisor performance recommendations found.": "Nenhuma recomendação de desempenho do Advisor encontrada.",
+    "No Advisor reliability recommendations found.": "Nenhuma recomendação de confiabilidade do Advisor encontrada.",
+    "No App Service Plan right-sizing data found.": "Nenhum dado de dimensionamento de Planos do App Service encontrado.",
+    "No Azure Resource Health / Service Health events found.": "Nenhum evento do Azure Resource Health / Service Health encontrado.",
+    "No Backup/Recovery Services vaults found.": "Nenhum cofre de Backup/Recovery Services encontrado.",
+    "No Defender for Cloud plans found.": "Nenhum plano do Defender for Cloud encontrado.",
+    "No Defender for Endpoint recommendations returned.": "Nenhuma recomendação do Defender for Endpoint retornada.",
+    "No Defender for Endpoint vulnerabilities returned.": "Nenhuma vulnerabilidade do Defender for Endpoint retornada.",
+    "No Defender plan data returned.": "Nenhum dado de plano do Defender retornado.",
+    "No MCSB assessment data returned.": "Nenhum dado de avaliação MCSB retornado.",
+    "No SQL right-sizing data found.": "Nenhum dado de dimensionamento de SQL encontrado.",
+    "No Secure Score controls returned.": "Nenhum controle de Secure Score retornado.",
+    "No Secure Score data found.": "Nenhum dado de Secure Score encontrado.",
+    "No VM right-sizing data found.": "Nenhum dado de dimensionamento de VMs encontrado.",
+    "No actual cost data found (requires Cost Management Reader).": "Nenhum dado de custo real encontrado (requer a função Cost Management Reader).",
+    "No alerts returned for the selected lookback period.": "Nenhum alerta retornado para o período selecionado.",
+    "No backup-protected items found (vaults exist but nothing is protected, or Backup Reader access is missing).": "Nenhum item protegido por backup encontrado (existem cofres, mas nada está protegido, ou falta acesso de Backup Reader).",
+    "No custom policy definitions found.": "Nenhuma definição de política personalizada encontrada.",
+    "No custom role definitions found.": "Nenhuma definição de função personalizada encontrada.",
+    "No deallocated VMs found.": "Nenhuma VM desalocada encontrada.",
+    "No expiring Key Vault secrets or certificates found (or Key Vault Get permission unavailable).": "Nenhum segredo ou certificado do Key Vault próximo da expiração encontrado (ou a permissão Get do Key Vault não está disponível).",
+    "No expiring app registration credentials found.": "Nenhuma credencial de registro de aplicativo próxima da expiração encontrada.",
+    "No extended FinOps findings.": "Nenhuma descoberta de FinOps estendida.",
+    "No guest (B2B) users found.": "Nenhum usuário convidado (B2B) encontrado.",
+    "No incidents returned for the selected lookback period.": "Nenhum incidente retornado para o período selecionado.",
+    "No management group data found.": "Nenhum dado de grupo de gerenciamento encontrado.",
+    "No non-compliant resources found.": "Nenhum recurso não conforme encontrado.",
+    "No open Defender for Cloud recommendations.": "Nenhuma recomendação aberta do Defender for Cloud.",
+    "No orphaned resources found.": "Nenhum recurso órfão encontrado.",
+    "No policy assignments found.": "Nenhuma atribuição de política encontrada.",
+    "No policy exemptions found.": "Nenhuma isenção de política encontrada.",
+    "No reservation/savings plan opportunities found.": "Nenhuma oportunidade de Reserva/Plano de Economia encontrada.",
+    "No resource locks configured.": "Nenhum bloqueio de recurso configurado.",
+    "No resource locks found.": "Nenhum bloqueio de recurso encontrado.",
+    "No resource summary found.": "Nenhum resumo de recursos encontrado.",
+    "No role assignments found.": "Nenhuma atribuição de função encontrada.",
+    "No saturated SQL databases found.": "Nenhum banco de dados SQL saturado encontrado.",
+    "No saturated VMs found.": "Nenhuma VM saturada encontrada.",
+    "No storage activity data found.": "Nenhum dado de atividade de armazenamento encontrado.",
+    "No unattached disks found.": "Nenhum disco não anexado encontrado.",
+    "No virtual networks found.": "Nenhuma rede virtual encontrada.",
+}
+
+def bi_empty(en: str, es: str) -> str:
+    """Render a translated empty-state message, falling back to English for new messages."""
+    return bi(en, es, EMPTY_STATE_PT.get(en, en))
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA READER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -429,19 +635,23 @@ class InsightEngine:
             title = f"{count} resource(s) affected: {problem}" if count > 1 else problem
             desc = solution or "Azure Advisor identified this issue for the impacted resource(s)."
             desc_es = solution or "Azure Advisor identificó este problema para los recursos afectados."
+            desc_pt = solution or "O Azure Advisor identificou este problema para os recursos afetados."
             if savings_field:
                 total = sum(float(r.get(savings_field, 0) or 0) for r in rows)
                 currency = next((r.get(savings_currency_field) for r in rows if r.get(savings_currency_field)), "USD")
                 if total > 0:
                     desc += f" Estimated annual savings: ~{total:,.0f} {currency}."
                     desc_es += f" Ahorro anual estimado: ~{total:,.0f} {currency}."
+                    desc_pt += f" Economia anual estimada: ~{total:,.0f} {currency}."
             self.action_items.append({
                 "pillar": pillar,
                 "severity": severity,
                 "title": title[:140],
                 "title_es": title[:140],
+                "title_pt": title[:140],
                 "description": desc,
                 "description_es": desc_es,
+                "description_pt": desc_pt,
                 "resources": resources[:10]
             })
 
@@ -493,8 +703,10 @@ class InsightEngine:
                 "severity": bucket["severity"],
                 "title": f'[{escape(bucket["service"])}] {title}',
                 "title_es": f'[{escape(bucket["service"])}] {title}',
+                "title_pt": f'[{escape(bucket["service"])}] {title}',
                 "description": desc,
                 "description_es": desc,
+                "description_pt": desc,
                 "resources": bucket["resources"][:10]
             })
     
@@ -515,8 +727,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(vms_no_zone)} VMs without Availability Zones",
                 "title_es": f"{len(vms_no_zone)} VMs sin Zonas de Disponibilidad",
+                "title_pt": f"{len(vms_no_zone)} VMs sem Zonas de Disponibilidade",
                 "description": "These VMs are not protected against datacenter failures. Consider migrating to zone-redundant deployments.",
                 "description_es": "Estas VMs no están protegidas contra fallas del centro de datos. Considere migrar a implementaciones con redundancia de zona.",
+                "description_pt": "Essas VMs não estão protegidas contra falhas de datacenter. Considere migrar para implantações com redundância de zona.",
                 "resources": [v.get("name", v.get("Name", "")) for v in vms_no_zone[:10]]
             })
         
@@ -529,8 +743,10 @@ class InsightEngine:
                 "severity": "critical",
                 "title": "No Backup/Recovery Services Vaults found",
                 "title_es": "No se encontraron Vaults de Backup/Recovery Services",
+                "title_pt": "Nenhum Vault de Backup/Recovery Services encontrado",
                 "description": "No backup infrastructure detected. Critical workloads should have backup policies configured.",
                 "description_es": "No se detectó infraestructura de copia de seguridad. Las cargas de trabajo críticas deben tener políticas de backup configuradas.",
+                "description_pt": "Nenhuma infraestrutura de backup detectada. Cargas de trabalho críticas devem ter políticas de backup configuradas.",
                 "resources": []
             })
         
@@ -545,8 +761,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(vnets_no_ddos)} VNets without DDoS Protection",
                 "title_es": f"{len(vnets_no_ddos)} VNets sin Protección DDoS",
+                "title_pt": f"{len(vnets_no_ddos)} VNets sem Proteção DDoS",
                 "description": "Enable Azure DDoS Protection Standard for internet-facing workloads.",
                 "description_es": "Habilite Azure DDoS Protection Standard para cargas de trabajo expuestas a Internet.",
+                "description_pt": "Habilite o Azure DDoS Protection Standard para cargas de trabalho expostas à Internet.",
                 "resources": [v.get("name", v.get("Name", "")) for v in vnets_no_ddos[:10]]
             })
         
@@ -592,8 +810,10 @@ class InsightEngine:
                 "severity": "critical",
                 "title": f"{len(public_storage)} Storage accounts allow public blob access",
                 "title_es": f"{len(public_storage)} Cuentas de almacenamiento permiten acceso público a blobs",
+                "title_pt": f"{len(public_storage)} Contas de armazenamento permitem acesso público a blobs",
                 "description": "Disable public blob access unless explicitly required. This is a common data exposure risk.",
                 "description_es": "Deshabilite el acceso público a blobs a menos que sea explícitamente necesario. Este es un riesgo común de exposición de datos.",
+                "description_pt": "Desabilite o acesso público a blobs, a menos que seja explicitamente necessário. Este é um risco comum de exposição de dados.",
                 "resources": [s.get("name", s.get("Name", "")) for s in public_storage[:10]]
             })
         
@@ -606,8 +826,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(kv_no_purge)} Key Vaults without Purge Protection",
                 "title_es": f"{len(kv_no_purge)} Key Vaults sin Protección contra Purga",
+                "title_pt": f"{len(kv_no_purge)} Key Vaults sem Proteção contra Purga",
                 "description": "Enable purge protection to prevent permanent deletion of secrets, keys, and certificates.",
                 "description_es": "Habilite la protección contra purga para evitar la eliminación permanente de secretos, claves y certificados.",
+                "description_pt": "Habilite a proteção contra exclusão definitiva para evitar a exclusão permanente de segredos, chaves e certificados.",
                 "resources": [k.get("name", k.get("Name", "")) for k in kv_no_purge[:10]]
             })
         
@@ -619,8 +841,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(old_tls)} Storage accounts not enforcing TLS 1.2",
                 "title_es": f"{len(old_tls)} Cuentas de almacenamiento sin exigir TLS 1.2",
+                "title_pt": f"{len(old_tls)} Contas de armazenamento sem exigir TLS 1.2",
                 "description": "Enforce minimum TLS 1.2 for all storage accounts to prevent protocol downgrade attacks.",
                 "description_es": "Exija TLS 1.2 como mínimo en todas las cuentas de almacenamiento para evitar ataques de downgrade de protocolo.",
+                "description_pt": "Exija TLS 1.2 no mínimo em todas as contas de armazenamento para evitar ataques de downgrade de protocolo.",
                 "resources": [s.get("name", s.get("Name", "")) for s in old_tls[:10]]
             })
         
@@ -643,8 +867,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(broad_privileged)} Owner/Contributor role assignments at subscription scope or higher",
                 "title_es": f"{len(broad_privileged)} Asignaciones de rol Owner/Contributor con alcance de suscripción o superior",
+                "title_pt": f"{len(broad_privileged)} Atribuições de função Owner/Contributor com escopo de assinatura ou superior",
                 "description": "Review broad-scope privileged role assignments for least-privilege access. Prefer scoping to resource groups.",
                 "description_es": "Revise las asignaciones de roles privilegiados de alcance amplio para aplicar el principio de mínimo privilegio. Prefiera limitar el alcance a grupos de recursos.",
+                "description_pt": "Revise as atribuições de funções privilegiadas de amplo escopo para aplicar o princípio de menor privilégio. Prefira limitar o escopo a grupos de recursos.",
                 "resources": [f"{r.get('principalType', '')} ({r.get('scope_', '')})" for r in broad_privileged[:10]]
             })
         
@@ -662,8 +888,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(disabled_plans)} Microsoft Defender for Cloud plans not enabled (Free tier)",
                 "title_es": f"{len(disabled_plans)} Planes de Microsoft Defender for Cloud no habilitados (nivel gratuito)",
+                "title_pt": f"{len(disabled_plans)} Planos do Microsoft Defender for Cloud não habilitados (nível gratuito)",
                 "description": "Enable Microsoft Defender for Cloud plans for full threat protection coverage.",
                 "description_es": "Habilite los planes de Microsoft Defender for Cloud para una cobertura completa de protección contra amenazas.",
+                "description_pt": "Habilite os planos do Microsoft Defender for Cloud para cobertura completa de proteção contra ameaças.",
                 "resources": sorted({p.get("planName", p.get("name", "")) for p in disabled_plans})[:10]
             })
 
@@ -682,8 +910,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(severe_recommendations)} high-severity Defender for Cloud recommendations",
                 "title_es": f"{len(severe_recommendations)} recomendaciones de alta severidad de Defender for Cloud",
+                "title_pt": f"{len(severe_recommendations)} recomendações de alta severidade do Defender for Cloud",
                 "description": "Prioritize unhealthy CSPM recommendations that carry critical or high severity.",
                 "description_es": "Priorice las recomendaciones de CSPM no saludables con severidad crítica o alta.",
+                "description_pt": "Priorize as recomendações de CSPM não saudáveis com severidade crítica ou alta.",
                 "resources": [
                     recommendation.get("recommendationName", recommendation.get("affectedResourceId", ""))
                     for recommendation in severe_recommendations[:10]
@@ -714,8 +944,10 @@ class InsightEngine:
                 "severity": "critical",
                 "title": f"{len(severe_incidents)} active high-severity security incidents",
                 "title_es": f"{len(severe_incidents)} incidentes de seguridad activos de alta severidad",
+                "title_pt": f"{len(severe_incidents)} incidentes de segurança ativos de alta severidade",
                 "description": "Investigate active Microsoft Defender XDR incidents and confirm ownership and containment.",
                 "description_es": "Investigue los incidentes activos de Microsoft Defender XDR y confirme su asignación y contención.",
+                "description_pt": "Investigue os incidentes ativos do Microsoft Defender XDR e confirme a responsabilidade e a contenção.",
                 "resources": [incident.get("DisplayName", incident.get("IncidentId", "")) for incident in severe_incidents[:10]]
             })
 
@@ -737,17 +969,17 @@ class InsightEngine:
             "secure_score_pct": round(avg_score, 1) if avg_score is not None else None,
             "subscriptions_scored": len(secure_scores),
             "findings": [
-                ("Public Blob Access on Storage Accounts", "Acceso p\u00fablico a blobs en cuentas de almacenamiento", len(public_storage)),
-                ("Key Vaults without Purge Protection", "Key Vaults sin Protecci\u00f3n contra Purga", len(kv_no_purge)),
-                ("Storage Accounts below TLS 1.2", "Cuentas de almacenamiento por debajo de TLS 1.2", len(old_tls)),
-                ("Broad-scope Owner/Contributor Assignments", "Asignaciones Owner/Contributor de alcance amplio", len(broad_privileged)),
-                ("Defender for Cloud Plans on Free Tier", "Planes de Defender for Cloud en nivel gratuito", len(disabled_plans)),
-                ("Open Defender for Cloud Recommendations", "Recomendaciones abiertas de Defender for Cloud", len(open_recommendations)),
-                ("Unhealthy Secure Score Control Resources", "Recursos no saludables en controles de Secure Score", unhealthy_control_resources),
-                ("Failed MCSB Resources", "Recursos con error en MCSB", mcsb_failed_resources),
-                ("Active Defender XDR Incidents", "Incidentes activos de Defender XDR", len(active_incidents)),
-                ("Active Security Alerts", "Alertas de seguridad activas", len(active_alerts) + len(active_cloud_alerts)),
-                ("Advisor Security Recommendations", "Recomendaciones de seguridad de Advisor", len(sec_recs)),
+                ("Public Blob Access on Storage Accounts", "Acceso p\u00fablico a blobs en cuentas de almacenamiento", "Acesso p\u00fablico a blobs em contas de armazenamento", len(public_storage)),
+                ("Key Vaults without Purge Protection", "Key Vaults sin Protecci\u00f3n contra Purga", "Key Vaults sem Prote\u00e7\u00e3o contra Purga", len(kv_no_purge)),
+                ("Storage Accounts below TLS 1.2", "Cuentas de almacenamiento por debajo de TLS 1.2", "Contas de armazenamento abaixo do TLS 1.2", len(old_tls)),
+                ("Broad-scope Owner/Contributor Assignments", "Asignaciones Owner/Contributor de alcance amplio", "Atribui\u00e7\u00f5es Owner/Contributor de amplo escopo", len(broad_privileged)),
+                ("Defender for Cloud Plans on Free Tier", "Planes de Defender for Cloud en nivel gratuito", "Planos do Defender for Cloud no n\u00edvel gratuito", len(disabled_plans)),
+                ("Open Defender for Cloud Recommendations", "Recomendaciones abiertas de Defender for Cloud", "Recomenda\u00e7\u00f5es abertas do Defender for Cloud", len(open_recommendations)),
+                ("Unhealthy Secure Score Control Resources", "Recursos no saludables en controles de Secure Score", "Recursos n\u00e3o saud\u00e1veis em controles do Secure Score", unhealthy_control_resources),
+                ("Failed MCSB Resources", "Recursos con error en MCSB", "Recursos com falha no MCSB", mcsb_failed_resources),
+                ("Active Defender XDR Incidents", "Incidentes activos de Defender XDR", "Incidentes ativos do Defender XDR", len(active_incidents)),
+                ("Active Security Alerts", "Alertas de seguridad activas", "Alertas de seguran\u00e7a ativos", len(active_alerts) + len(active_cloud_alerts)),
+                ("Advisor Security Recommendations", "Recomendaciones de seguridad de Advisor", "Recomenda\u00e7\u00f5es de seguran\u00e7a do Advisor", len(sec_recs)),
             ],
             "open_recommendations": len(open_recommendations),
             "severe_recommendations": len(severe_recommendations),
@@ -789,8 +1021,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(orphaned)} Orphaned/unused resources detected",
                 "title_es": f"{len(orphaned)} Recursos huérfanos/no utilizados detectados",
+                "title_pt": f"{len(orphaned)} Recursos órfãos/não utilizados detectados",
                 "description": "These resources incur costs but are not attached to any workload. Review and delete if unused.",
                 "description_es": "Estos recursos generan costos pero no están asociados a ninguna carga de trabajo. Revíselos y elimínelos si no se utilizan.",
+                "description_pt": "Esses recursos geram custos, mas não estão associados a nenhuma carga de trabalho. Revise e exclua se não forem utilizados.",
                 "resources": [o.get("Name", o.get("name", "")) for o in orphaned[:10]]
             })
         
@@ -810,8 +1044,10 @@ class InsightEngine:
                 "severity": "low",
                 "title": f"{len(dealloc_vms)} Deallocated VMs (still paying for disks/IPs)",
                 "title_es": f"{len(dealloc_vms)} VMs desasignadas (aún generan costo por discos/IPs)",
+                "title_pt": f"{len(dealloc_vms)} VMs desalocadas (ainda geram custo por discos/IPs)",
                 "description": "Deallocated VMs still incur costs for attached disks and static IPs. Consider deleting if no longer needed.",
                 "description_es": "Las VMs desasignadas siguen generando costos por los discos e IPs estáticas asociadas. Considere eliminarlas si ya no son necesarias.",
+                "description_pt": "VMs desalocadas continuam gerando custos pelos discos e IPs estáticos associados. Considere excluí-las se não forem mais necessárias.",
                 "resources": [v.get("name", v.get("Name", "")) for v in dealloc_vms[:10]]
             })
         
@@ -832,8 +1068,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(underutilized)} VMs are idle or underutilized",
                 "title_es": f"{len(underutilized)} VMs están inactivas o subutilizadas",
+                "title_pt": f"{len(underutilized)} VMs estão ociosas ou subutilizadas",
                 "description": "These VMs have <15% average CPU over 30 days. Consider downsizing or deallocating.",
                 "description_es": "Estas VMs tienen <15% de uso promedio de CPU en 30 días. Considere reducir su tamaño o desasignarlas.",
+                "description_pt": "Essas VMs têm menos de 15% de uso médio de CPU em 30 dias. Considere redimensionar ou desalocar.",
                 "resources": [f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)" for v in underutilized[:10]]
             })
         
@@ -854,8 +1092,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(sql_waste)} SQL databases are oversized or underutilized",
                 "title_es": f"{len(sql_waste)} bases de datos SQL están sobredimensionadas o subutilizadas",
+                "title_pt": f"{len(sql_waste)} bancos de dados SQL estão superdimensionados ou subutilizados",
                 "description": "These databases run well below their provisioned DTU/CPU tier over 30 days. Consider a lower SKU.",
                 "description_es": "Estas bases de datos operan muy por debajo de su nivel de DTU/CPU aprovisionado durante 30 días. Considere un SKU menor.",
+                "description_pt": "Esses bancos de dados operam bem abaixo do nível de DTU/CPU provisionado durante 30 dias. Considere um SKU menor.",
                 "resources": [f"{d.get('Name', '')} ({d.get('SKU', '')} @ {d.get('AvgUsage_Pct', '?')}% {d.get('MetricType', '')})" for d in sql_waste[:10]]
             })
 
@@ -876,8 +1116,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(plan_waste)} App Service Plans are idle or underutilized",
                 "title_es": f"{len(plan_waste)} planes de App Service están inactivos o subutilizados",
+                "title_pt": f"{len(plan_waste)} planos do App Service estão ociosos ou subutilizados",
                 "description": "These plans run well below their provisioned CPU/memory over 30 days. Consider scaling down or consolidating apps.",
                 "description_es": "Estos planes operan muy por debajo de su CPU/memoria aprovisionada durante 30 días. Considere reducir su tamaño o consolidar aplicaciones.",
+                "description_pt": "Esses planos operam bem abaixo da CPU/memória provisionada durante 30 dias. Considere reduzir o tamanho ou consolidar aplicativos.",
                 "resources": [f"{p.get('Name', '')} ({p.get('SKU', '')} @ {p.get('AvgCPU_Pct', '?')}% CPU)" for p in plan_waste[:10]]
             })
 
@@ -898,8 +1140,10 @@ class InsightEngine:
                 "severity": "low",
                 "title": f"{len(storage_waste)} Storage accounts show zero/minimal activity",
                 "title_es": f"{len(storage_waste)} cuentas de almacenamiento muestran actividad nula/mínima",
+                "title_pt": f"{len(storage_waste)} contas de armazenamento apresentam atividade nula/mínima",
                 "description": "These storage accounts had near-zero transactions over 30 days. Review for deletion or tier downgrade (e.g. to Archive).",
                 "description_es": "Estas cuentas de almacenamiento tuvieron transacciones casi nulas durante 30 días. Considere eliminarlas o cambiarlas a un nivel más económico (p. ej. Archive).",
+                "description_pt": "Essas contas de armazenamento tiveram transações quase nulas durante 30 dias. Considere excluí-las ou migrá-las para um nível mais econômico (ex.: Archive).",
                 "resources": [f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgDailyTxns', '?')} txns/day)" for s in storage_waste[:10]]
             })
 
@@ -928,13 +1172,16 @@ class InsightEngine:
             currency = next((r.get("Currency") for r in reservation_recs if r.get("Currency")), "USD")
             desc = f"Buying the recommended Reserved Instances/Savings Plans could save ~{total_net_savings:,.0f} {currency}/year vs. pay-as-you-go."
             desc_es = f"Comprar las Reservas/Planes de Ahorro recomendados podría ahorrar ~{total_net_savings:,.0f} {currency}/año frente a pago por uso."
+            desc_pt = f"Comprar as Reservas/Planos de Economia recomendados pode economizar ~{total_net_savings:,.0f} {currency}/ano em relação ao pagamento conforme o uso."
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "medium",
                 "title": f"{len(reservation_recs)} Reservation/Savings Plan opportunities",
                 "title_es": f"{len(reservation_recs)} oportunidades de Reservas/Planes de Ahorro",
+                "title_pt": f"{len(reservation_recs)} oportunidades de Reservas/Planos de Economia",
                 "description": desc,
                 "description_es": desc_es,
+                "description_pt": desc_pt,
                 "resources": [f"{r.get('ResourceType', '')} {r.get('SkuName', '')} x{r.get('RecommendedQty', '?')} ({r.get('Term', '')})" for r in reservation_recs[:10]]
             })
 
@@ -943,16 +1190,16 @@ class InsightEngine:
         # Hybrid Benefit) - the extra Azure Resource Graph checks FinOps Hub runs daily.
         finops = self.data.get("finops", {})
         extended_sheets = {
-            "UnattachedPublicIPs": ("Unattached Public IPs", "IPs Públicas No Adjuntas"),
-            "StoppedVMs": ("Stopped (not deallocated) VMs", "VMs Detenidas (no desasignadas)"),
-            "BackendlessAppGateways": ("Backendless Application Gateways", "Application Gateways sin Backend"),
-            "BackendlessLoadBalancers": ("Backendless Load Balancers", "Load Balancers sin Backend"),
-            "EmptySqlElasticPools": ("Empty SQL Elastic Pools", "Grupos Elásticos SQL Vacíos"),
-            "NonSpotAKSPools": ("Non-Spot autoscaling AKS pools", "Pools AKS con autoescalado sin Spot"),
-            "VMsWithoutHybridBenefit": ("VMs without Azure Hybrid Benefit", "VMs sin Azure Hybrid Benefit"),
-            "SqlVMsWithoutHybridBenefit": ("SQL VMs without Azure Hybrid Benefit", "VMs SQL sin Azure Hybrid Benefit"),
+            "UnattachedPublicIPs": ("Unattached Public IPs", "IPs Públicas No Adjuntas", "IPs Públicos Não Anexados"),
+            "StoppedVMs": ("Stopped (not deallocated) VMs", "VMs Detenidas (no desasignadas)", "VMs Paradas (não desalocadas)"),
+            "BackendlessAppGateways": ("Backendless Application Gateways", "Application Gateways sin Backend", "Application Gateways sem Backend"),
+            "BackendlessLoadBalancers": ("Backendless Load Balancers", "Load Balancers sin Backend", "Load Balancers sem Backend"),
+            "EmptySqlElasticPools": ("Empty SQL Elastic Pools", "Grupos Elásticos SQL Vacíos", "Pools Elásticos SQL Vazios"),
+            "NonSpotAKSPools": ("Non-Spot autoscaling AKS pools", "Pools AKS con autoescalado sin Spot", "Pools AKS com autoescala sem Spot"),
+            "VMsWithoutHybridBenefit": ("VMs without Azure Hybrid Benefit", "VMs sin Azure Hybrid Benefit", "VMs sem Azure Hybrid Benefit"),
+            "SqlVMsWithoutHybridBenefit": ("SQL VMs without Azure Hybrid Benefit", "VMs SQL sin Azure Hybrid Benefit", "VMs SQL sem Azure Hybrid Benefit"),
         }
-        for sheet_name, (title_en, title_es) in extended_sheets.items():
+        for sheet_name, (title_en, title_es, title_pt) in extended_sheets.items():
             rows = self._data_rows(finops.get(sheet_name, []))
             if not rows:
                 continue
@@ -969,8 +1216,10 @@ class InsightEngine:
                 "severity": "low",
                 "title": f"{len(rows)} {title_en}",
                 "title_es": f"{len(rows)} {title_es}",
+                "title_pt": f"{len(rows)} {title_pt}",
                 "description": "Extra FinOps optimization check (mirrors Azure FinOps Hub's daily Resource Graph queries). Review and remediate if unused.",
                 "description_es": "Verificación adicional de optimización FinOps (equivalente a las consultas diarias de Resource Graph de Azure FinOps Hub). Revise y corrija si no se utiliza.",
+                "description_pt": "Verificação adicional de otimização FinOps (equivalente às consultas diárias do Resource Graph do Azure FinOps Hub). Revise e corrija se não for utilizado.",
                 "resources": [str(r.get("name", "")) for r in rows[:10]]
             })
 
@@ -1008,8 +1257,10 @@ class InsightEngine:
                     "severity": "high",
                     "title": f"{len(no_diag)}/{len(diag)} critical resources missing diagnostic settings ({pct_missing:.0f}%)",
                     "title_es": f"{len(no_diag)}/{len(diag)} recursos críticos sin configuración de diagnóstico ({pct_missing:.0f}%)",
+                    "title_pt": f"{len(no_diag)}/{len(diag)} recursos críticos sem configuração de diagnóstico ({pct_missing:.0f}%)",
                     "description": "Configure diagnostic settings to send logs to Log Analytics for observability and troubleshooting.",
                     "description_es": "Configure ajustes de diagnóstico para enviar registros a Log Analytics para observabilidad y solución de problemas.",
+                    "description_pt": "Configure as configurações de diagnóstico para enviar logs ao Log Analytics para observabilidade e solução de problemas.",
                     "resources": [d.get("Name", d.get("name", "")) for d in no_diag[:10]]
                 })
         
@@ -1033,8 +1284,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": f"{len(untagged_names)}/{total_taggable} resources have no tags ({pct_untagged:.0f}%)",
                 "title_es": f"{len(untagged_names)}/{total_taggable} recursos no tienen etiquetas ({pct_untagged:.0f}%)",
+                "title_pt": f"{len(untagged_names)}/{total_taggable} recursos não têm tags ({pct_untagged:.0f}%)",
                 "description": "Implement a tagging strategy (Owner, CostCenter, Environment, Application) for governance and cost allocation.",
                 "description_es": "Implemente una estrategia de etiquetado (Owner, CostCenter, Environment, Application) para gobernanza y asignación de costos.",
+                "description_pt": "Implemente uma estratégia de tags (Owner, CostCenter, Environment, Application) para governança e alocação de custos.",
                 "resources": untagged_names[:10]
             })
         
@@ -1047,8 +1300,10 @@ class InsightEngine:
                 "severity": "medium",
                 "title": "No resource locks configured",
                 "title_es": "No hay bloqueos de recursos configurados",
+                "title_pt": "Nenhum bloqueio de recurso configurado",
                 "description": "Apply CanNotDelete or ReadOnly locks to critical resources (networking, databases, key vaults) to prevent accidental deletion or modification.",
                 "description_es": "Aplique bloqueos CanNotDelete o ReadOnly a los recursos críticos (redes, bases de datos, key vaults) para evitar eliminaciones o modificaciones accidentales.",
+                "description_pt": "Aplique bloqueios CanNotDelete ou ReadOnly a recursos críticos (redes, bancos de dados, key vaults) para evitar exclusões ou modificações acidentais.",
                 "resources": []
             })
         
@@ -1065,8 +1320,10 @@ class InsightEngine:
                     "severity": "medium",
                     "title": f"{total_nc} non-compliant policy evaluations",
                     "title_es": f"{total_nc} evaluaciones de políticas no conformes",
+                    "title_pt": f"{total_nc} avaliações de política não conformes",
                     "description": "Review policy compliance and remediate non-compliant resources or adjust policy assignments.",
                     "description_es": "Revise el cumplimiento de políticas y corrija los recursos no conformes o ajuste las asignaciones de políticas.",
+                    "description_pt": "Revise a conformidade de políticas e corrija os recursos não conformes ou ajuste as atribuições de política.",
                     "resources": [f"{c.get('policyAssignment', c.get('policyAssignmentName', ''))} ({c.get('NonCompliantCount', 0)} violations)" for c in compliance[:10]]
                 })
         
@@ -1098,8 +1355,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(saturated)} VMs are saturated (>80% CPU)",
                 "title_es": f"{len(saturated)} VMs están saturadas (>80% CPU)",
+                "title_pt": f"{len(saturated)} VMs estão saturadas (>80% CPU)",
                 "description": "These VMs are consistently at high CPU usage. Consider scaling up or scaling out.",
                 "description_es": "Estas VMs presentan un uso de CPU consistentemente alto. Considere escalar verticalmente u horizontalmente.",
+                "description_pt": "Essas VMs apresentam uso de CPU consistentemente alto. Considere escalar verticalmente ou horizontalmente.",
                 "resources": [f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)" for v in saturated[:10]]
             })
         
@@ -1114,8 +1373,10 @@ class InsightEngine:
                 "severity": "high",
                 "title": f"{len(saturated_sql)} SQL Databases are saturated (>80% DTU/CPU)",
                 "title_es": f"{len(saturated_sql)} Bases de datos SQL están saturadas (>80% DTU/CPU)",
+                "title_pt": f"{len(saturated_sql)} Bancos de dados SQL estão saturados (>80% DTU/CPU)",
                 "description": "These databases are consistently at high utilization. Consider scaling up the tier.",
                 "description_es": "Estas bases de datos presentan una utilización consistentemente alta. Considere aumentar el nivel de servicio.",
+                "description_pt": "Esses bancos de dados apresentam utilização consistentemente alta. Considere aumentar o nível de serviço.",
                 "resources": [f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgUsage_Pct', '?')}%)" for s in saturated_sql[:10]]
             })
         
@@ -1180,6 +1441,25 @@ class DashboardGenerator:
         svg = re.sub(r"<svg ", f'<svg class="{css_class}" ', svg, count=1)
         return svg
 
+    _RESOURCE_KIND_ICON = {
+        "VMs": "resource-compute", "DeallocatedVMs": "resource-compute",
+        "AppServices": "resource-compute", "AKS": "resource-compute",
+        "VNets": "resource-network", "NSGs": "resource-network",
+        "LoadBalancers": "resource-network", "Firewalls": "resource-network",
+        "PrivateEndpoints": "resource-network", "PublicIPs": "resource-network",
+        "DNS": "resource-network",
+        "Storage": "resource-storage", "UnattachedDisks": "resource-storage",
+        "Databases": "resource-database",
+        "KeyVaults": "resource-security", "KeyVaultExpirations": "resource-security",
+        "ManagedIdentities": "resource-security", "PolicyAssignments": "resource-security",
+        "Monitoring": "resource-monitor", "ResourceHealthEvents": "resource-monitor",
+        "AdvisorRecommendations": "resource-monitor",
+        "BackupVaults": "resource-backup", "BackupProtectedItems": "resource-backup",
+    }
+
+    def _resource_kind_icon(self, kind: str) -> str:
+        return self._azure_icon(self._RESOURCE_KIND_ICON.get(kind, "resource-generic"), "az-icon resource-icon")
+
     def _render_security_view(self) -> str:
         """Render dedicated security posture, compliance, and operations details."""
         security = self.data.get("security", {})
@@ -1199,8 +1479,8 @@ class DashboardGenerator:
 
         def render_table(rows, columns, empty_en, empty_es, limit=12):
             if not rows:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
-            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
@@ -1211,8 +1491,8 @@ class DashboardGenerator:
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
-                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
-                less_text = bi("Show less", "Mostrar menos")
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s", f"+ {len(rows) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
                 more = (
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
@@ -1239,7 +1519,7 @@ class DashboardGenerator:
                 entry["passed"] += passed
                 entry["total"] += passed + failed + skipped + unsupported
             if not totals:
-                return f'<p class="empty-state">{bi("No regulatory compliance standards found.", "No se encontraron est\u00e1ndares de cumplimiento normativo.")}</p>'
+                return f'<p class="empty-state">{bi("No regulatory compliance standards found.", "No se encontraron est\u00e1ndares de cumplimiento normativo.", "Nenhum padr\u00e3o de conformidade regulat\u00f3ria encontrado.")}</p>'
             items = sorted(totals.items(), key=lambda kv: (kv[1]["passed"] / kv[1]["total"]) if kv[1]["total"] else 0)
             rows_html = ""
             for name, entry in items:
@@ -1301,13 +1581,13 @@ class DashboardGenerator:
         secure_score = breakdown.get("secure_score_pct")
         secure_score_text = f"{secure_score:.1f}%" if secure_score is not None else "N/A"
         stats = [
-            (secure_score_text, bi("Defender Secure Score", "Secure Score de Defender"), "security-accent"),
-            (breakdown.get("open_recommendations", 0), bi("Open CSPM Recommendations", "Recomendaciones CSPM abiertas"), "security-danger"),
-            (breakdown.get("mcsb_failed_resources", 0), bi("Failed MCSB Resources", "Recursos con error en MCSB"), "security-warning"),
-            (breakdown.get("active_incidents", 0), bi("Active XDR Incidents", "Incidentes XDR activos"), "security-danger"),
-            (breakdown.get("active_alerts", 0), bi("Active Security Alerts", "Alertas de seguridad activas"), "security-warning"),
-            (at_risk_machines, bi("High-risk Endpoints", "Endpoints de alto riesgo"), "security-danger"),
-            (len(expired_kv_items) + len(expired_app_credentials), bi("Expired Credentials", "Credenciales expiradas"), "security-danger" if (expired_kv_items or expired_app_credentials) else ""),
+            (secure_score_text, bi("Defender Secure Score", "Secure Score de Defender", "Secure Score do Defender"), "security-accent"),
+            (breakdown.get("open_recommendations", 0), bi("Open CSPM Recommendations", "Recomendaciones CSPM abiertas", "Recomendações CSPM abertas"), "security-danger"),
+            (breakdown.get("mcsb_failed_resources", 0), bi("Failed MCSB Resources", "Recursos con error en MCSB", "Recursos com falha no MCSB"), "security-warning"),
+            (breakdown.get("active_incidents", 0), bi("Active XDR Incidents", "Incidentes XDR activos", "Incidentes XDR ativos"), "security-danger"),
+            (breakdown.get("active_alerts", 0), bi("Active Security Alerts", "Alertas de seguridad activas", "Alertas de segurança ativos"), "security-warning"),
+            (at_risk_machines, bi("High-risk Endpoints", "Endpoints de alto riesgo", "Endpoints de alto risco"), "security-danger"),
+            (len(expired_kv_items) + len(expired_app_credentials), bi("Expired Credentials", "Credenciales expiradas", "Credenciais expiradas"), "security-danger" if (expired_kv_items or expired_app_credentials) else ""),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
@@ -1326,11 +1606,11 @@ class DashboardGenerator:
             </tr>"""
         if source_status:
             source_table = f"""<div class="security-table-wrap"><table>
-                <thead><tr><th>{bi('Source', 'Fuente')}</th><th>{bi('Status', 'Estado')}</th><th>{bi('Records', 'Registros')}</th><th>{bi('Details', 'Detalles')}</th></tr></thead>
+                <thead><tr><th>{bi('Source', 'Fuente', 'Fonte')}</th><th>{bi('Status', 'Estado', 'Status')}</th><th>{bi('Records', 'Registros', 'Registros')}</th><th>{bi('Details', 'Detalles', 'Detalhes')}</th></tr></thead>
                 <tbody>{status_rows}</tbody>
             </table></div>"""
         else:
-            source_table = f'<p class="empty-state">{bi("Security source status is unavailable.", "El estado de las fuentes de seguridad no está disponible.")}</p>'
+            source_table = f'<p class="empty-state">{bi("Security source status is unavailable.", "El estado de las fuentes de seguridad no está disponible.", "O status das fontes de segurança não está disponível.")}</p>'
 
         recommendations_table = render_table(recommendations, [
             ("recommendationSeverity", "Severity", "Severidad", False),
@@ -1411,56 +1691,56 @@ class DashboardGenerator:
         <div class="security-summary-band">
             <div>
                 <div class="security-eyebrow">MICROSOFT DEFENDER</div>
-                <h2>{bi('Security posture and operations', 'Postura y operaciones de seguridad')}</h2>
-                <p>{bi('CSPM, Microsoft Cloud Security Benchmark, Defender XDR, and endpoint exposure in one assessment.', 'CSPM, Microsoft Cloud Security Benchmark, Defender XDR y exposición de endpoints en una sola evaluación.')}</p>
+                <h2>{bi('Security posture and operations', 'Postura y operaciones de seguridad', 'Postura e operações de segurança')}</h2>
+                <p>{bi('CSPM, Microsoft Cloud Security Benchmark, Defender XDR, and endpoint exposure in one assessment.', 'CSPM, Microsoft Cloud Security Benchmark, Defender XDR y exposición de endpoints en una sola evaluación.', 'CSPM, Microsoft Cloud Security Benchmark, Defender XDR e exposição de endpoints em uma única avaliação.')}</p>
             </div>
             <div class="security-score-mark">{secure_score_text}</div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM')}</div>
+            <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM', 'Recomendações CSPM')}</div>
             {recommendations_table}
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Regulatory and framework compliance', 'Cumplimiento normativo y de marcos')}</div>
+            <div class="section-title security-title">{bi('Regulatory and framework compliance', 'Cumplimiento normativo y de marcos', 'Conformidade regulatória e de frameworks')}</div>
             {compliance_bars}
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Secure Score controls', 'Controles de Secure Score')}</h3>{controls_table}</div>
-            <div class="security-panel"><h3>{bi('Microsoft Cloud Security Benchmark', 'Microsoft Cloud Security Benchmark')}</h3>{mcsb_table}</div>
+            <div class="security-panel"><h3>{bi('Secure Score controls', 'Controles de Secure Score', 'Controles do Secure Score')}</h3>{controls_table}</div>
+            <div class="security-panel"><h3>{bi('Microsoft Cloud Security Benchmark', 'Microsoft Cloud Security Benchmark', 'Microsoft Cloud Security Benchmark')}</h3>{mcsb_table}</div>
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Defender for Cloud coverage', 'Cobertura de Defender for Cloud')}</h3>{plans_table}</div>
-            <div class="security-panel"><h3>{bi('Data source coverage', 'Cobertura de fuentes de datos')}</h3>{source_table}</div>
+            <div class="security-panel"><h3>{bi('Defender for Cloud coverage', 'Cobertura de Defender for Cloud', 'Cobertura do Defender for Cloud')}</h3>{plans_table}</div>
+            <div class="security-panel"><h3>{bi('Data source coverage', 'Cobertura de fuentes de datos', 'Cobertura de fontes de dados')}</h3>{source_table}</div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Defender XDR operations', 'Operaciones de Defender XDR')}</div>
+            <div class="section-title security-title">{bi('Defender XDR operations', 'Operaciones de Defender XDR', 'Operações do Defender XDR')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Recent incidents', 'Incidentes recientes')}</h3>{incidents_table}</div>
-                <div class="security-panel"><h3>{bi('Recent alerts', 'Alertas recientes')}</h3>{alerts_table}</div>
+                <div class="security-panel"><h3>{bi('Recent incidents', 'Incidentes recientes', 'Incidentes recentes')}</h3>{incidents_table}</div>
+                <div class="security-panel"><h3>{bi('Recent alerts', 'Alertas recientes', 'Alertas recentes')}</h3>{alerts_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Defender for Endpoint exposure', 'Exposición de Defender for Endpoint')}</div>
+            <div class="section-title security-title">{bi('Defender for Endpoint exposure', 'Exposición de Defender for Endpoint', 'Exposição do Defender for Endpoint')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad')}</h3>{endpoint_recommendations_table}</div>
-                <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
+                <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad', 'Recomendações de segurança')}</h3>{endpoint_recommendations_table}</div>
+                <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Credential and identity hygiene', 'Higiene de credenciales e identidad')}</div>
+            <div class="section-title security-title">{bi('Credential and identity hygiene', 'Higiene de credenciales e identidad', 'Higiene de credenciais e identidade')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Key Vault secret/certificate expiration', 'Expiraci\u00f3n de secretos/certificados de Key Vault')}</h3>{keyvault_expirations_table}</div>
-                <div class="security-panel"><h3>{bi('App registration credential expiration', 'Expiraci\u00f3n de credenciales de registros de aplicaciones')}</h3>{app_credential_table}</div>
+                <div class="security-panel"><h3>{bi('Key Vault secret/certificate expiration', 'Expiraci\u00f3n de secretos/certificados de Key Vault', 'Expiração de segredos/certificados do Key Vault')}</h3>{keyvault_expirations_table}</div>
+                <div class="security-panel"><h3>{bi('App registration credential expiration', 'Expiraci\u00f3n de credenciales de registros de aplicaciones', 'Expiração de credenciais de registro de aplicativos')}</h3>{app_credential_table}</div>
             </div>
             <div class="security-panel">
-                <h3>{bi('Guest (B2B) users', 'Usuarios invitados (B2B)')}</h3>
+                <h3>{bi('Guest (B2B) users', 'Usuarios invitados (B2B)', 'Usuários convidados (B2B)')}</h3>
                 {guest_users_table}
             </div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Action items', 'Elementos de acción')}</div>
+            <div class="section-title security-title">{bi('Action items', 'Elementos de acción', 'Itens de ação')}</div>
             {self._render_actions_for_pillar("Security")}
         </div>"""
 
@@ -1470,64 +1750,80 @@ class DashboardGenerator:
             {
                 "name": "Azure Policy",
                 "name_es": "Azure Policy",
+                "name_pt": "Azure Policy",
                 "description": "Standardize configuration and remediate policy, compliance, tagging, public-access, and resource-protection gaps at scale.",
                 "description_es": "Estandarice la configuración y corrija a escala las brechas de políticas, cumplimiento, etiquetado, acceso público y protección de recursos.",
+                "description_pt": "Padronize a configuração e corrija em escala as lacunas de política, conformidade, tags, acesso público e proteção de recursos.",
                 "keywords": ("policy assignment", "policy evaluation", "policy compliance", "non-compliant", "compliance", "tagging", "no tags", "resource lock", "public access"),
                 "url": "https://learn.microsoft.com/azure/governance/policy/overview",
             },
             {
                 "name": "Log Analytics workspace + Azure Monitor",
                 "name_es": "Área de trabajo de Log Analytics + Azure Monitor",
+                "name_pt": "Workspace do Log Analytics + Azure Monitor",
                 "description": "Centralize diagnostic logs, metrics, alerts, and operational queries for resources that lack observability or show capacity pressure.",
                 "description_es": "Centralice registros de diagnóstico, métricas, alertas y consultas operativas para recursos sin observabilidad o con presión de capacidad.",
+                "description_pt": "Centralize logs de diagnóstico, métricas, alertas e consultas operacionais para recursos sem observabilidade ou com pressão de capacidade.",
                 "keywords": ("diagnostic", "log analytics", "observability", "monitoring", "metric", "cpu", "saturat", "performance"),
                 "url": "https://learn.microsoft.com/azure/azure-monitor/fundamentals/overview",
             },
             {
                 "name": "Recovery Services vault + Azure Backup",
                 "name_es": "Almacén de Recovery Services + Azure Backup",
+                "name_pt": "Cofre do Recovery Services + Azure Backup",
                 "description": "Provide centralized backup policy, protected recovery points, and restore operations for workloads with missing or weak data protection.",
                 "description_es": "Proporcione políticas de copia de seguridad centralizadas, puntos de recuperación protegidos y operaciones de restauración para cargas con protección de datos insuficiente.",
+                "description_pt": "Forneça política de backup centralizada, pontos de recuperação protegidos e operações de restauração para cargas de trabalho com proteção de dados ausente ou fraca.",
                 "keywords": ("backup", "recovery services", "recovery vault", "restore", "recovery point"),
                 "url": "https://learn.microsoft.com/azure/backup/backup-overview",
             },
             {
                 "name": "Azure DDoS Network Protection plan",
                 "name_es": "Plan de Azure DDoS Network Protection",
+                "name_pt": "Plano do Azure DDoS Network Protection",
                 "description": "Protect internet-facing virtual networks with adaptive DDoS mitigation, telemetry, and attack support.",
                 "description_es": "Proteja redes virtuales expuestas a Internet con mitigación DDoS adaptativa, telemetría y soporte ante ataques.",
+                "description_pt": "Proteja redes virtuais expostas à Internet com mitigação adaptativa de DDoS, telemetria e suporte a ataques.",
                 "keywords": ("ddos",),
                 "url": "https://learn.microsoft.com/azure/ddos-protection/ddos-protection-overview",
             },
             {
                 "name": "Microsoft Defender for Cloud",
                 "name_es": "Microsoft Defender for Cloud",
+                "name_pt": "Microsoft Defender for Cloud",
                 "description": "Improve cloud security posture, prioritize high-risk recommendations, and add workload protection where coverage is missing.",
                 "description_es": "Mejore la postura de seguridad, priorice recomendaciones de alto riesgo y agregue protección de cargas donde falte cobertura.",
+                "description_pt": "Melhore a postura de segurança, priorize recomendações de alto risco e adicione proteção de cargas de trabalho onde a cobertura estiver faltando.",
                 "keywords": ("defender", "secure score", "cspm", "mcsb", "security posture", "vulnerab", "security recommendation", "tls"),
                 "url": "https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction",
             },
             {
                 "name": "Microsoft Sentinel",
                 "name_es": "Microsoft Sentinel",
+                "name_pt": "Microsoft Sentinel",
                 "description": "Centralize security incidents and alerts for investigation, automation, and coordinated response.",
                 "description_es": "Centralice incidentes y alertas de seguridad para investigación, automatización y respuesta coordinada.",
+                "description_pt": "Centralize incidentes e alertas de segurança para investigação, automação e resposta coordenada.",
                 "keywords": ("security incident", "xdr incident", "security alert", "xdr alert"),
                 "url": "https://learn.microsoft.com/azure/sentinel/overview",
             },
             {
                 "name": "Azure Key Vault",
                 "name_es": "Azure Key Vault",
+                "name_pt": "Azure Key Vault",
                 "description": "Centralize secrets, keys, and certificates with controlled access, rotation, and lifecycle protection.",
                 "description_es": "Centralice secretos, claves y certificados con acceso controlado, rotación y protección del ciclo de vida.",
+                "description_pt": "Centralize segredos, chaves e certificados com acesso controlado, rotação e proteção do ciclo de vida.",
                 "keywords": ("key vault", "secret", "certificate", "credential", "access key"),
                 "url": "https://learn.microsoft.com/azure/key-vault/general/overview",
             },
             {
                 "name": "Azure Cost Management budgets",
                 "name_es": "Presupuestos de Azure Cost Management",
+                "name_pt": "Orçamentos do Azure Cost Management",
                 "description": "Add budget guardrails and cost alerts while teams remove idle assets, right-size workloads, and evaluate commitment discounts.",
                 "description_es": "Agregue controles presupuestarios y alertas de costos mientras los equipos eliminan activos inactivos, ajustan cargas y evalúan descuentos por compromiso.",
+                "description_pt": "Adicione controles de orçamento e alertas de custo enquanto as equipes removem ativos ociosos, redimensionam cargas de trabalho e avaliam descontos por compromisso.",
                 "keywords": ("cost", "orphan", "unused", "underutil", "idle", "savings", "rightsiz", "reservation", "deallocated", "unattached"),
                 "url": "https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets",
             },
@@ -1552,31 +1848,32 @@ class DashboardGenerator:
     def _render_azure_resource_recommendations(self) -> str:
         recommendations = self._recommend_azure_resources()
         if not recommendations:
-            return f'<p class="empty-state">{bi("No additional Azure resources are indicated by the current findings.", "Los hallazgos actuales no indican recursos adicionales de Azure.")}</p>'
+            return f'<p class="empty-state">{bi("No additional Azure resources are indicated by the current findings.", "Los hallazgos actuales no indican recursos adicionales de Azure.", "Os achados atuais n\u00e3o indicam recursos adicionais do Azure.")}</p>'
 
         priority_es = {"high": "Alta", "medium": "Media", "low": "Baja"}
+        priority_pt = {"high": "Alta", "medium": "Média", "low": "Baixa"}
         cards = []
         for recommendation in recommendations:
             evidence_items = "".join(
-                f'<li>{bi(escape(str(item.get("title", ""))), escape(str(item.get("title_es", item.get("title", "")))))}</li>'
+                f'<li>{bi(escape(str(item.get("title", ""))), escape(str(item.get("title_es", item.get("title", "")))), escape(str(item.get("title_pt", item.get("title", "")))))}</li>'
                 for item in recommendation["evidence"][:3]
             )
             remaining = len(recommendation["evidence"]) - 3
             if remaining > 0:
-                evidence_items += f'<li class="resource-rec-more">{bi(f"+ {remaining} more supporting findings", f"+ {remaining} hallazgos de soporte adicionales")}</li>'
+                evidence_items += f'<li class="resource-rec-more">{bi(f"+ {remaining} more supporting findings", f"+ {remaining} hallazgos de soporte adicionales", f"+ {remaining} descobertas de suporte adicionais")}</li>'
             priority = recommendation["priority"]
             cards.append(f"""<article class="resource-rec-card resource-rec-{priority}">
                 <div class="resource-rec-heading">
                     <div>
-                        <span class="resource-rec-priority">{bi(priority.title() + ' priority', 'Prioridad ' + priority_es[priority])}</span>
-                        <h3>{bi(escape(recommendation['name']), escape(recommendation['name_es']))}</h3>
+                        <span class="resource-rec-priority">{bi(priority.title() + ' priority', 'Prioridad ' + priority_es[priority], 'Prioridade ' + priority_pt[priority])}</span>
+                        <h3>{bi(escape(recommendation['name']), escape(recommendation['name_es']), escape(recommendation['name_pt']))}</h3>
                     </div>
-                    <span class="resource-rec-count">{len(recommendation['evidence'])} {bi('findings', 'hallazgos')}</span>
+                    <span class="resource-rec-count">{len(recommendation['evidence'])} {bi('findings', 'hallazgos', 'descobertas')}</span>
                 </div>
-                <p>{bi(escape(recommendation['description']), escape(recommendation['description_es']))}</p>
-                <div class="resource-rec-evidence-label">{bi('Recommended because', 'Recomendado por')}</div>
+                <p>{bi(escape(recommendation['description']), escape(recommendation['description_es']), escape(recommendation['description_pt']))}</p>
+                <div class="resource-rec-evidence-label">{bi('Recommended because', 'Recomendado por', 'Recomendado porque')}</div>
                 <ul>{evidence_items}</ul>
-                <a class="resource-rec-link" href="{escape(recommendation['url'])}" target="_blank" rel="noopener">{bi('Review on Microsoft Learn', 'Revisar en Microsoft Learn')} &rarr;</a>
+                <a class="resource-rec-link" href="{escape(recommendation['url'])}" target="_blank" rel="noopener">{bi('Review on Microsoft Learn', 'Revisar en Microsoft Learn', 'Revisar no Microsoft Learn')} &rarr;</a>
             </article>""")
         return f'<div class="resource-rec-grid">{"".join(cards)}</div>'
 
@@ -1592,8 +1889,8 @@ class DashboardGenerator:
 
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
-            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
@@ -1604,8 +1901,8 @@ class DashboardGenerator:
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
-                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
-                less_text = bi("Show less", "Mostrar menos")
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s", f"+ {len(rows) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
                 more = (
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
@@ -1629,14 +1926,14 @@ class DashboardGenerator:
 
         non_compliant_count = sum(int(r.get("NonCompliantCount", 0) or 0) for r in policy_compliance) or len(policy_compliance)
         stats = [
-            (len(mg_rows), bi("Management Groups", "Grupos de Administraci\u00f3n")),
-            (len(subs_rows), bi("Subscriptions", "Suscripciones")),
-            (len(policy_assignments), bi("Policy Assignments", "Asignaciones de Pol\u00edticas")),
-            (non_compliant_count, bi("Non-Compliant Resources", "Recursos No Conformes")),
-            (len(role_assignments), bi("Role Assignments", "Asignaciones de Roles")),
-            (len(locks), bi("Resource Locks", "Bloqueos de Recursos")),
-            (len(orphaned), bi("Orphaned Resources", "Recursos Hu\u00e9rfanos")),
-            (len(policy_exemptions), bi("Policy Exemptions", "Exenciones de Pol\u00edtica")),
+            (len(mg_rows), bi("Management Groups", "Grupos de Administraci\u00f3n", "Grupos de Gerenciamento")),
+            (len(subs_rows), bi("Subscriptions", "Suscripciones", "Assinaturas")),
+            (len(policy_assignments), bi("Policy Assignments", "Asignaciones de Pol\u00edticas", "Atribui\u00e7\u00f5es de Pol\u00edtica")),
+            (non_compliant_count, bi("Non-Compliant Resources", "Recursos No Conformes", "Recursos N\u00e3o Conformes")),
+            (len(role_assignments), bi("Role Assignments", "Asignaciones de Roles", "Atribui\u00e7\u00f5es de Fun\u00e7\u00e3o")),
+            (len(locks), bi("Resource Locks", "Bloqueos de Recursos", "Bloqueios de Recursos")),
+            (len(orphaned), bi("Orphaned Resources", "Recursos Hu\u00e9rfanos", "Recursos \u00d3rf\u00e3os")),
+            (len(policy_exemptions), bi("Policy Exemptions", "Exenciones de Pol\u00edtica", "Isen\u00e7\u00f5es de Pol\u00edtica")),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value security-accent">{count:,}</div><div class="label">{label}</div></div>'
@@ -1720,9 +2017,9 @@ class DashboardGenerator:
             "more": (130, 40),
         }
         DIAGRAM_H_GAP, DIAGRAM_V_GAP = 28, 46
-        DIAGRAM_INDENT, DIAGRAM_VLIST_GAP = 28, 10
-        # MG/Sub form the horizontal "parallel" org-chart row; RGs/Resources are lazy,
-        # collapsed-by-default vertical outline lists so they never widen the canvas.
+        # MG/Sub form the horizontal "parallel" org-chart row (SVG); RGs/Resources are rendered
+        # separately as a plain HTML collapsible tree below (see render_resource_explorer) so an
+        # expanded subtree can never overlap the SVG-positioned MG/Sub boxes or their siblings.
         HORIZONTAL_KINDS = {"mg", "sub"}
         _diagram_id_seq = [0]
 
@@ -1796,15 +2093,24 @@ class DashboardGenerator:
             for c in node["children"]:
                 assign_ids(c)
 
+        def collect_sub_nodes(node, out):
+            if node["kind"] == "sub":
+                out.append(node)
+            for c in node["children"]:
+                collect_sub_nodes(c, out)
+
         def build_diagram(roots):
             tree_roots = [{"kind": "mg", "data": r, "children": []} for r in roots]
             for root in tree_roots:
                 root["children"] = diagram_children(root)
             if not tree_roots:
-                return ""
+                return "", []
 
             for root in tree_roots:
                 assign_ids(root)
+            sub_nodes = []
+            for root in tree_roots:
+                collect_sub_nodes(root, sub_nodes)
 
             cursor = 0
             for i, root in enumerate(tree_roots):
@@ -1884,39 +2190,19 @@ class DashboardGenerator:
                         f'<span class="mg-badge mg-badge-rbac" title="{r_count} role assignments">{r_count}</span>'
                     )
                     if node["children"]:
+                        sub_id_esc = escape(sub_id)
+                        onclick_js = (
+                            "var el=document.getElementById('rg-explorer-" + sub_id_esc + "'); "
+                            "if(el){el.open=true; el.scrollIntoView({behavior:'smooth', block:'center'});}"
+                        )
+                        onclick_attr = f' onclick="{onclick_js}" style="cursor:pointer;"'
                         expand_html = (
-                            f'<button type="button" class="mg-diagram-expand" aria-expanded="false" '
-                            f'onclick="toggleDiagramNode(event, \'{node["_id"]}\')">'
+                            f'<span class="mg-diagram-expand">'
                             f'<span class="mg-diagram-expand-icon">\u25b8</span> {len(node["children"])} '
-                            f'{bi("RGs", "GR")}</button>'
+                            f'{bi("RGs", "GR", "GRs")}</span>'
                         )
-                elif kind == "rg":
-                    name = str(data.get("name", "") or "")
-                    loc = str(data.get("location", "") or "")
-                    icon = '<span class="mg-diagram-emoji">\U0001F4C1</span>'
-                    box_class = "mg-diagram-node mg-diagram-node-rg"
-                    badges = f'<span class="mg-diagram-restype">{escape(loc)}</span>' if loc else ""
-                    if node["children"]:
-                        real_count = sum(1 for c in node["children"] if c["kind"] == "resource")
-                        more_child = next((c for c in node["children"] if c["kind"] == "more"), None)
-                        total_count = real_count + (more_child["data"]["count"] if more_child else 0)
-                        expand_html = (
-                            f'<button type="button" class="mg-diagram-expand" aria-expanded="false" '
-                            f'onclick="toggleDiagramNode(event, \'{node["_id"]}\')">'
-                            f'<span class="mg-diagram-expand-icon">\u25b8</span> {total_count} '
-                            f'{bi("resources", "recursos")}</button>'
-                        )
-                elif kind == "resource":
-                    name = str(data.get("name", "") or "")
-                    box_class = "mg-diagram-node mg-diagram-node-resource"
-                    badges = f'<span class="mg-diagram-restype">{escape(str(data.get("kind", "")))}</span>'
-                else:  # "more"
-                    count = data.get("count", 0)
-                    return (
-                        f'<foreignObject x="{x - w / 2:.1f}" y="{y - h / 2:.1f}" width="{w}" height="{h}">'
-                        '<div xmlns="http://www.w3.org/1999/xhtml" class="mg-diagram-node mg-diagram-node-more">'
-                        f'+ {count} {bi("more", "m\u00e1s")}</div></foreignObject>'
-                    )
+                else:  # "rg"/"resource"/"more" kinds are only used by the HTML resource explorer, not the SVG
+                    return ""
 
                 label = name
                 avail_px = w - (16 if icon else 0) - 6 - 20
@@ -1929,34 +2215,6 @@ class DashboardGenerator:
                     f'<div class="mg-diagram-name">{icon}<span>{escape(label)}</span></div>'
                     f'<div class="mg-diagram-badges">{badges}</div>{expand_html}</div></foreignObject>'
                 )
-
-            def render_vertical_list(parent, children, indent_level):
-                # Renders RG/Resource children as an indented vertical outline below `parent`
-                # so they grow downward (scrollable) instead of widening the canvas.
-                trunk_x = parent["_x"]
-                item_left = trunk_x + DIAGRAM_INDENT * indent_level
-                parent_bottom_y = parent["_y"] + node_height(parent) / 2
-                y = parent_bottom_y + DIAGRAM_VLIST_GAP
-                parts = []
-                for child in children:
-                    ch, cw = node_height(child), node_width(child)
-                    child["_y"] = y + ch / 2
-                    child["_x"] = item_left + cw / 2
-                    mid_y = child["_y"]
-                    parts.append(
-                        f'<path d="M {trunk_x:.1f},{parent_bottom_y:.1f} L {trunk_x:.1f},{mid_y:.1f} '
-                        f'L {item_left:.1f},{mid_y:.1f}" class="mg-diagram-link" fill="none" />'
-                    )
-                    parts.append(render_node_box(child))
-                    nested = [c for c in child["children"] if c["kind"] not in HORIZONTAL_KINDS]
-                    if nested:
-                        nested_html = render_vertical_list(child, nested, indent_level + 1)
-                        parts.append(
-                            f'<g class="diagram-subtree" data-owner="{child["_id"]}" style="display:none">'
-                            f'{nested_html}</g>'
-                        )
-                    y += ch + DIAGRAM_VLIST_GAP
-                return "".join(parts)
 
             def render_subtree(node):
                 parts = [render_node_box(node)]
@@ -1971,12 +2229,6 @@ class DashboardGenerator:
                         f'{child["_x"]:.1f},{mid_y:.1f} {child["_x"]:.1f},{y_top:.1f}" class="mg-diagram-link" fill="none" />'
                     )
                     parts.append(link + render_subtree(child))
-                vlist_children = [c for c in node["children"] if c["kind"] not in HORIZONTAL_KINDS]
-                if vlist_children:
-                    vlist_html = render_vertical_list(node, vlist_children, 1)
-                    parts.append(
-                        f'<g class="diagram-subtree" data-owner="{node["_id"]}" style="display:none">{vlist_html}</g>'
-                    )
                 return "".join(parts)
 
             body = "".join(render_subtree(root) for root in tree_roots)
@@ -1984,13 +2236,55 @@ class DashboardGenerator:
                 f'<svg class="mg-diagram-svg" viewBox="0 0 {diagram_w:.0f} {diagram_h:.0f}" '
                 f'width="{diagram_w:.0f}" height="{diagram_h:.0f}">{body}</svg>'
             )
-            return f'<div class="mg-diagram-wrap">{svg}</div>'
+            return f'<div class="mg-diagram-wrap">{svg}</div>', sub_nodes
+
+        def render_resource_explorer(sub_nodes):
+            items = []
+            for sub in sub_nodes:
+                if not sub["children"]:
+                    continue
+                sub_id = str(sub["data"].get("subscriptionId", ""))
+                sub_name = str(sub["data"].get("name", sub_id) or sub_id)
+                rg_items = []
+                for rg in sub["children"]:
+                    rg_name = str(rg["data"].get("name", "") or "")
+                    loc = str(rg["data"].get("location", "") or "")
+                    real = [c for c in rg["children"] if c["kind"] == "resource"]
+                    more_c = next((c for c in rg["children"] if c["kind"] == "more"), None)
+                    res_count = len(real) + (more_c["data"]["count"] if more_c else 0)
+                    res_lines = "".join(
+                        f'<li>{self._resource_kind_icon(str(r["data"]["kind"]))}'
+                        f'<span class="resource-name">{escape(str(r["data"]["name"]))}</span>'
+                        f'<span class="mg-diagram-restype">{escape(str(r["data"]["kind"]))}</span></li>'
+                        for r in real
+                    )
+                    if more_c:
+                        res_lines += f'<li class="resource-more">+ {more_c["data"]["count"]} {bi("more", "m\u00e1s", "mais")}</li>'
+                    body = (
+                        f'<ul class="rgx-resource-list">{res_lines}</ul>' if res_lines
+                        else f'<p class="empty-state">{bi("No resources found.", "No se encontraron recursos.", "Nenhum recurso encontrado.")}</p>'
+                    )
+                    loc_badge = f'<span class="scope-id">{escape(loc)}</span>' if loc else ""
+                    rg_items.append(f"""<details class="rg-explorer-item">
+                        <summary>{self._azure_icon('resource-groups')} <strong>{escape(rg_name)}</strong> {loc_badge}
+                            <span class="mg-badge mg-badge-subs">{res_count} {bi('resources', 'recursos', 'recursos')}</span>
+                        </summary>
+                        {body}
+                    </details>""")
+                items.append(f"""<details class="rg-explorer" id="rg-explorer-{escape(sub_id)}">
+                    <summary>{self._azure_icon('subscriptions')} <strong>{escape(sub_name)}</strong></summary>
+                    <div class="rg-explorer-list">{''.join(rg_items)}</div>
+                </details>""")
+            return "".join(items)
 
         if has_hierarchy:
             roots = [m for m in mg_rows if mg_level(m) == 0]
-            hierarchy_html = build_diagram(roots)
+            hierarchy_html, sub_nodes_for_explorer = build_diagram(roots)
         else:
-            hierarchy_html = ""
+            hierarchy_html, sub_nodes_for_explorer = "", []
+        resource_explorer_html = render_resource_explorer(sub_nodes_for_explorer)
+        if not resource_explorer_html:
+            resource_explorer_html = f'<p class="empty-state">{bi("No resource group data found (requires the Discovery phase).", "No se encontraron datos de grupos de recursos (requiere la fase de Discovery).", "Nenhum dado de grupo de recursos encontrado (requer a fase de Discovery).")}</p>'
         if not hierarchy_html:
             hierarchy_html = render_table(mg_rows, [
                 ("displayName", "Name", "Nombre", False),
@@ -2011,19 +2305,19 @@ class DashboardGenerator:
                         f"<tr><td>{escape(str(p.get('displayName', '')))}</td><td>{escape(str(p.get('enforcement', '')))}</td><td>{escape(str(p.get('identity_', '')))}</td></tr>"
                         for p in mg_policies[:10]
                     )
-                    policy_table = f"""<table class="mini-table"><thead><tr><th>{bi('Policy', 'Pol\u00edtica')}</th><th>{bi('Enforcement', 'Aplicaci\u00f3n')}</th><th>{bi('Identity', 'Identidad')}</th></tr></thead><tbody>{policy_rows}</tbody></table>"""
+                    policy_table = f"""<table class="mini-table"><thead><tr><th>{bi('Policy', 'Pol\u00edtica', 'Pol\u00edtica')}</th><th>{bi('Enforcement', 'Aplicaci\u00f3n', 'Aplica\u00e7\u00e3o')}</th><th>{bi('Identity', 'Identidad', 'Identidade')}</th></tr></thead><tbody>{policy_rows}</tbody></table>"""
                 else:
-                    policy_table = f'<p class="empty-state">{bi("No policy assignments at this scope.", "Sin asignaciones de pol\u00edticas en este alcance.")}</p>'
+                    policy_table = f'<p class="empty-state">{bi("No policy assignments at this scope.", "Sin asignaciones de pol\u00edticas en este alcance.", "Sem atribui\u00e7\u00f5es de pol\u00edtica neste escopo.")}</p>'
                 scope_items.append(f"""<details class="scope-detail" id="mg-scope-{escape(mg_id)}">
                     <summary>{indent} <strong>{escape(str(mg.get('DisplayName', mg_id)))}</strong> <span class="scope-id">({escape(mg_id)})</span>
-                        <span class="mg-badge mg-badge-policy">{len(mg_policies)} {bi('policies', 'pol.')}</span>
-                        <span class="mg-badge mg-badge-rbac">{len(mg_roles)} {bi('roles', 'roles')}</span>
-                        <span class="mg-badge mg-badge-subs">{mg.get('Subscriptions', 0)} {bi('subs', 'subs')}</span>
+                        <span class="mg-badge mg-badge-policy">{len(mg_policies)} {bi('policies', 'pol.', 'pol.')}</span>
+                        <span class="mg-badge mg-badge-rbac">{len(mg_roles)} {bi('roles', 'roles', 'fun\u00e7\u00f5es')}</span>
+                        <span class="mg-badge mg-badge-subs">{mg.get('Subscriptions', 0)} {bi('subs', 'subs', 'assin.')}</span>
                     </summary>
-                    <p><strong>{bi('Path', 'Ruta')}:</strong> {escape(str(mg.get('Path', '')))}</p>
+                    <p><strong>{bi('Path', 'Ruta', 'Caminho')}:</strong> {escape(str(mg.get('Path', '')))}</p>
                     {policy_table}
                 </details>""")
-        scope_insights_html = "".join(scope_items) if scope_items else f'<p class="empty-state">{bi("Scope insights require the Management Group hierarchy (Level/Path fields).", "Los detalles de alcance requieren la jerarqu\u00eda de Grupos de Administraci\u00f3n (campos Level/Path).")}</p>'
+        scope_insights_html = "".join(scope_items) if scope_items else f'<p class="empty-state">{bi("Scope insights require the Management Group hierarchy (Level/Path fields).", "Los detalles de alcance requieren la jerarqu\u00eda de Grupos de Administraci\u00f3n (campos Level/Path).", "Os detalhes de escopo exigem a hierarquia de Grupos de Gerenciamento (campos Level/Path).")}</p>'
 
         policy_assignments_table = render_table(policy_assignments, [
             ("displayName", "Name", "Nombre", False),
@@ -2092,46 +2386,50 @@ class DashboardGenerator:
         <div class="security-summary-band">
             <div>
                 <div class="security-eyebrow">GOVERNANCE VISUALIZER</div>
-                <h2>{bi('Management hierarchy, policy, and RBAC', 'Jerarqu\u00eda de administraci\u00f3n, pol\u00edticas y RBAC')}</h2>
-                <p>{bi('Management group tree, policy/RBAC assignments, and per-scope insights in one native view.', 'Árbol de grupos de administraci\u00f3n, asignaciones de pol\u00edticas/RBAC y detalles por alcance en una vista nativa.')}</p>
+                <h2>{bi('Management hierarchy, policy, and RBAC', 'Jerarqu\u00eda de administraci\u00f3n, pol\u00edticas y RBAC', 'Hierarquia de gerenciamento, pol\u00edtica e RBAC')}</h2>
+                <p>{bi('Management group tree, policy/RBAC assignments, and per-scope insights in one native view.', 'Árbol de grupos de administraci\u00f3n, asignaciones de pol\u00edticas/RBAC y detalles por alcance en una vista nativa.', 'Árvore de grupos de gerenciamento, atribui\u00e7\u00f5es de pol\u00edtica/RBAC e detalhes por escopo em uma \u00fanica visualiza\u00e7\u00e3o nativa.')}</p>
             </div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title security-title">{bi('Hierarchy map', 'Mapa de jerarqu\u00eda')}</div>
+            <div class="section-title security-title">{bi('Hierarchy map', 'Mapa de jerarqu\u00eda', 'Mapa de hierarquia')}</div>
             {hierarchy_html}
         </div>
-        <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Policy assignments', 'Asignaciones de pol\u00edticas')}</h3>{policy_assignments_table}</div>
-            <div class="security-panel"><h3>{bi('Custom policy definitions', 'Definiciones de pol\u00edticas personalizadas')}</h3>{custom_policies_table}</div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Resource explorer', 'Explorador de recursos', 'Explorador de recursos')}</div>
+            <div class="rg-explorer-wrap">{resource_explorer_html}</div>
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Non-compliant resources', 'Recursos no conformes')}</h3>{policy_compliance_table}</div>
-            <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos')}</h3>{locks_table}</div>
+            <div class="security-panel"><h3>{bi('Policy assignments', 'Asignaciones de pol\u00edticas', 'Atribui\u00e7\u00f5es de pol\u00edtica')}</h3>{policy_assignments_table}</div>
+            <div class="security-panel"><h3>{bi('Custom policy definitions', 'Definiciones de pol\u00edticas personalizadas', 'Defini\u00e7\u00f5es de pol\u00edtica personalizadas')}</h3>{custom_policies_table}</div>
+        </div>
+        <div class="security-two-column">
+            <div class="security-panel"><h3>{bi('Non-compliant resources', 'Recursos no conformes', 'Recursos n\u00e3o conformes')}</h3>{policy_compliance_table}</div>
+            <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos', 'Bloqueios de recursos')}</h3>{locks_table}</div>
         </div>
         <div class="security-panel">
-            <h3>{bi('Policy exemptions', 'Exenciones de pol\u00edtica')}</h3>
+            <h3>{bi('Policy exemptions', 'Exenciones de pol\u00edtica', 'Isen\u00e7\u00f5es de pol\u00edtica')}</h3>
             {policy_exemptions_table}
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Role assignments', 'Asignaciones de roles')}</h3>{role_assignments_table}</div>
-            <div class="security-panel"><h3>{bi('Custom role definitions', 'Definiciones de roles personalizados')}</h3>{custom_roles_table}</div>
+            <div class="security-panel"><h3>{bi('Role assignments', 'Asignaciones de roles', 'Atribui\u00e7\u00f5es de fun\u00e7\u00e3o')}</h3>{role_assignments_table}</div>
+            <div class="security-panel"><h3>{bi('Custom role definitions', 'Definiciones de roles personalizados', 'Defini\u00e7\u00f5es de fun\u00e7\u00e3o personalizadas')}</h3>{custom_roles_table}</div>
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Defender for Cloud plans', 'Planes de Defender for Cloud')}</h3>{defender_plans_table}</div>
-            <div class="security-panel"><h3>{bi('Secure Score by subscription', 'Secure Score por suscripci\u00f3n')}</h3>{secure_scores_table}</div>
+            <div class="security-panel"><h3>{bi('Defender for Cloud plans', 'Planes de Defender for Cloud', 'Planos do Defender for Cloud')}</h3>{defender_plans_table}</div>
+            <div class="security-panel"><h3>{bi('Secure Score by subscription', 'Secure Score por suscripci\u00f3n', 'Secure Score por assinatura')}</h3>{secure_scores_table}</div>
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Resources by type & location', 'Recursos por tipo y ubicaci\u00f3n')}</h3>{resource_summary_table}</div>
-            <div class="security-panel"><h3>{bi('Orphaned resources (cost savings)', 'Recursos hu\u00e9rfanos (ahorro de costos)')}</h3>{orphaned_table}</div>
+            <div class="security-panel"><h3>{bi('Resources by type & location', 'Recursos por tipo y ubicaci\u00f3n', 'Recursos por tipo e localiza\u00e7\u00e3o')}</h3>{resource_summary_table}</div>
+            <div class="security-panel"><h3>{bi('Orphaned resources (cost savings)', 'Recursos hu\u00e9rfanos (ahorro de costos)', 'Recursos \u00f3rf\u00e3os (economia de custos)')}</h3>{orphaned_table}</div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Virtual networks', 'Redes virtuales')}</div>
+            <div class="section-title security-title">{bi('Virtual networks', 'Redes virtuales', 'Redes virtuais')}</div>
             {vnets_table}
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Scope insights', 'Detalles por alcance')}</div>
+            <div class="section-title security-title">{bi('Scope insights', 'Detalles por alcance', 'Detalhes por escopo')}</div>
             <div class="scope-insights">{scope_insights_html}</div>
         </div>"""
 
@@ -2156,8 +2454,8 @@ class DashboardGenerator:
 
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
-            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
@@ -2168,8 +2466,8 @@ class DashboardGenerator:
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
-                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
-                less_text = bi("Show less", "Mostrar menos")
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s", f"+ {len(rows) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
                 more = (
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
@@ -2272,11 +2570,11 @@ class DashboardGenerator:
                     f'<circle cx="{fx:.1f}" cy="{fy:.1f}" r="4" fill="var(--cp-warning)" stroke="var(--cp-warning)" />'
                     f'<text x="{fx:.1f}" y="{max(fy - 12, 14):.1f}" text-anchor="middle" class="trend-value-label" style="fill:var(--cp-warning);">${forecast_value:,.0f}</text>'
                     f'<text x="{fx:.1f}" y="{height - 10}" text-anchor="middle" class="trend-month-label" style="fill:var(--cp-warning);">'
-                    f'<tspan class="i18n-en">Forecast</tspan><tspan class="i18n-es">Pron\u00f3stico</tspan></text>'
+                    f'<tspan class="i18n-en">Forecast</tspan><tspan class="i18n-es">Pron\u00f3stico</tspan><tspan class="i18n-pt">Previs\u00e3o</tspan></text>'
                 )
                 forecast_badge = (
                     f'<span class="finops-trend-delta" style="color:var(--cp-warning);">'
-                    f'{bi("Next month forecast", "Pron\u00f3stico pr\u00f3ximo mes")}: ${forecast_value:,.0f}</span>'
+                    f'{bi("Next month forecast", "Pron\u00f3stico pr\u00f3ximo mes", "Previs\u00e3o do pr\u00f3ximo m\u00eas")}: ${forecast_value:,.0f}</span>'
                 )
             delta_html = ""
             if n >= 2 and values[-2]:
@@ -2286,13 +2584,13 @@ class DashboardGenerator:
                     arrow, color = "\u25cf", "var(--cp-text-muted)"
                 delta_html = (
                     f'<span class="finops-trend-delta" style="color:{color};">{arrow} {abs(delta_pct):.1f}% '
-                    f'{bi("vs prior month", "vs. mes anterior")}</span>'
+                    f'{bi("vs prior month", "vs. mes anterior", "vs. mês anterior")}</span>'
                 )
             return f"""<div class="finops-trend-card">
                 <div class="finops-trend-head">
                     <div>
                         <span class="finops-trend-total">${values[-1]:,.0f}</span>
-                        <span class="finops-trend-total-label">{bi("latest month", "\u00faltimo mes")}</span>
+                        <span class="finops-trend-total-label">{bi("latest month", "\u00faltimo mes", "\u00faltimo m\u00eas")}</span>
                     </div>
                     {delta_html}
                     {forecast_badge}
@@ -2320,13 +2618,13 @@ class DashboardGenerator:
             for r in rows:
                 totals[str(r.get(group_key) or "Unknown")] += as_float(r.get("Cost"))
             if not totals:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
             items = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
             total_all = sum(v for _, v in items) or 1
             top = items[:limit]
             other_total = sum(v for _, v in items[limit:])
             if other_total > 0:
-                top.append((bi("Other", "Otros"), other_total))
+                top.append((bi("Other", "Otros", "Outros"), other_total))
             max_val = max(v for _, v in top) if top else 1
             rows_html = "".join(
                 f"""<div class="cost-bar-row">
@@ -2344,14 +2642,14 @@ class DashboardGenerator:
         finops = self.data.get("finops", {})
         actual_cost_rows = [r for r in real_rows(finops, "ActualCost") if r.get("Cost") not in (None, "")]
         extended_sheets = [
-            ("UnattachedPublicIPs", bi("Unattached Public IPs", "IPs P\u00fablicas No Adjuntas")),
-            ("StoppedVMs", bi("Stopped (not deallocated) VMs", "VMs Detenidas (no desasignadas)")),
-            ("BackendlessAppGateways", bi("Backendless App Gateways", "App Gateways sin Backend")),
-            ("BackendlessLoadBalancers", bi("Backendless Load Balancers", "Load Balancers sin Backend")),
-            ("EmptySqlElasticPools", bi("Empty SQL Elastic Pools", "Grupos El\u00e1sticos SQL Vac\u00edos")),
-            ("NonSpotAKSPools", bi("Non-Spot AKS Pools", "Pools AKS sin Spot")),
-            ("VMsWithoutHybridBenefit", bi("VMs w/o Hybrid Benefit", "VMs sin Hybrid Benefit")),
-            ("SqlVMsWithoutHybridBenefit", bi("SQL VMs w/o Hybrid Benefit", "VMs SQL sin Hybrid Benefit")),
+            ("UnattachedPublicIPs", bi("Unattached Public IPs", "IPs P\u00fablicas No Adjuntas", "IPs P\u00fablicos N\u00e3o Anexados")),
+            ("StoppedVMs", bi("Stopped (not deallocated) VMs", "VMs Detenidas (no desasignadas)", "VMs Paradas (n\u00e3o desalocadas)")),
+            ("BackendlessAppGateways", bi("Backendless App Gateways", "App Gateways sin Backend", "App Gateways sem Backend")),
+            ("BackendlessLoadBalancers", bi("Backendless Load Balancers", "Load Balancers sin Backend", "Load Balancers sem Backend")),
+            ("EmptySqlElasticPools", bi("Empty SQL Elastic Pools", "Grupos El\u00e1sticos SQL Vac\u00edos", "Pools El\u00e1sticos SQL Vazios")),
+            ("NonSpotAKSPools", bi("Non-Spot AKS Pools", "Pools AKS sin Spot", "Pools AKS sem Spot")),
+            ("VMsWithoutHybridBenefit", bi("VMs w/o Hybrid Benefit", "VMs sin Hybrid Benefit", "VMs sem Hybrid Benefit")),
+            ("SqlVMsWithoutHybridBenefit", bi("SQL VMs w/o Hybrid Benefit", "VMs SQL sin Hybrid Benefit", "VMs SQL sem Hybrid Benefit")),
         ]
         extended_recs = []
         for sheet_name, label in extended_sheets:
@@ -2390,20 +2688,20 @@ class DashboardGenerator:
         actual_cost_currency = next((r.get("Currency") for r in actual_cost_rows if r.get("Currency")), "USD")
 
         stats = [
-            (savings_text, bi("Est. Annual Savings", "Ahorro Anual Est."), "security-accent"),
-            (len(cost_recs), bi("Advisor Cost Recs", "Recom. de Costos"), ""),
-            (len(reservation_recs), bi("Reservation Opportunities", "Oportunidades de Reserva"), ""),
-            (len(vm_waste), bi("Idle/Underutilized VMs", "VMs Inactivas/Subutilizadas"), "security-warning"),
-            (len(sql_waste), bi("SQL DBs to Rightsize", "BD SQL para Ajustar"), "security-warning"),
-            (len(plan_waste), bi("App Plans to Rightsize", "Planes App para Ajustar"), "security-warning"),
-            (len(storage_waste), bi("Low-activity Storage", "Almacenamiento de Baja Actividad"), "security-warning"),
-            (orphaned_total, bi("Orphaned/Unused Resources", "Recursos Hu\u00e9rfanos/No Usados"), "security-danger"),
-            (len(extended_recs), bi("Extended FinOps Checks", "Verificaciones FinOps Extendidas"), "security-warning"),
+            (savings_text, bi("Est. Annual Savings", "Ahorro Anual Est.", "Economia Anual Est."), "security-accent"),
+            (len(cost_recs), bi("Advisor Cost Recs", "Recom. de Costos", "Recom. de Custos"), ""),
+            (len(reservation_recs), bi("Reservation Opportunities", "Oportunidades de Reserva", "Oportunidades de Reserva"), ""),
+            (len(vm_waste), bi("Idle/Underutilized VMs", "VMs Inactivas/Subutilizadas", "VMs Ociosas/Subutilizadas"), "security-warning"),
+            (len(sql_waste), bi("SQL DBs to Rightsize", "BD SQL para Ajustar", "BDs SQL para Ajustar"), "security-warning"),
+            (len(plan_waste), bi("App Plans to Rightsize", "Planes App para Ajustar", "Planos App para Ajustar"), "security-warning"),
+            (len(storage_waste), bi("Low-activity Storage", "Almacenamiento de Baja Actividad", "Armazenamento de Baixa Atividade"), "security-warning"),
+            (orphaned_total, bi("Orphaned/Unused Resources", "Recursos Hu\u00e9rfanos/No Usados", "Recursos \u00d3rf\u00e3os/N\u00e3o Usados"), "security-danger"),
+            (len(extended_recs), bi("Extended FinOps Checks", "Verificaciones FinOps Extendidas", "Verifica\u00e7\u00f5es FinOps Estendidas"), "security-warning"),
         ]
         if budgets:
-            stats.append((len(budgets_over), bi("Budgets Over Threshold", "Presupuestos Excedidos"), "security-danger" if budgets_over else ""))
+            stats.append((len(budgets_over), bi("Budgets Over Threshold", "Presupuestos Excedidos", "Or\u00e7amentos Excedidos"), "security-danger" if budgets_over else ""))
         if actual_cost_rows:
-            stats.insert(1, (f"{total_actual_cost:,.0f} {actual_cost_currency}", bi("Actual Cost (6mo)", "Costo Real (6 meses)"), ""))
+            stats.insert(1, (f"{total_actual_cost:,.0f} {actual_cost_currency}", bi("Actual Cost (6mo)", "Costo Real (6 meses)", "Custo Real (6 meses)"), ""))
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
             for value, label, color_class in stats
@@ -2506,7 +2804,7 @@ class DashboardGenerator:
 
         def render_budget_bars(rows):
             if not rows:
-                return f'<p class="empty-state">{bi("No budgets configured (Microsoft.Consumption/budgets).", "No hay presupuestos configurados (Microsoft.Consumption/budgets).")}</p>'
+                return f'<p class="empty-state">{bi("No budgets configured (Microsoft.Consumption/budgets).", "No hay presupuestos configurados (Microsoft.Consumption/budgets).", "Nenhum or\u00e7amento configurado (Microsoft.Consumption/budgets).")}</p>'
             rows_html = ""
             for b in sorted(rows, key=lambda r: r.get("_pct", 0), reverse=True):
                 pct = min(b.get("_pct", 0), 100)
@@ -2529,7 +2827,7 @@ class DashboardGenerator:
             for r in rows:
                 service_totals[str(r.get("ServiceName") or "Unknown")] += as_float(r.get("Cost"))
             if not service_totals:
-                return f'<p class="empty-state">{bi("No cost data available to cross-reference.", "No hay datos de costo disponibles para cruzar.")}</p>'
+                return f'<p class="empty-state">{bi("No cost data available to cross-reference.", "No hay datos de costo disponibles para cruzar.", "Nenhum dado de custo disponível para cruzamento.")}</p>'
             top_services = sorted(service_totals.items(), key=lambda kv: kv[1], reverse=True)[:12]
             other_actions = [a for a in self.engine.action_items if a.get("pillar") != "Cost Optimization"]
             sev_weight = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
@@ -2552,10 +2850,10 @@ class DashboardGenerator:
                     "CostDisplay": f"${cost:,.0f}",
                     "OpenFindings": len(matches),
                     "TopSeverity": str(worst.get("severity", "")).upper(),
-                    "TopIssue": bi(worst.get("title", ""), worst.get("title_es", worst.get("title", ""))),
+                    "TopIssue": bi(worst.get("title", ""), worst.get("title_es", worst.get("title", "")), worst.get("title_pt", worst.get("title", ""))),
                 })
             if not cross_rows:
-                return f'<p class="empty-state">{bi("No expensive services currently have open findings in other pillars.", "Ning\u00fan servicio costoso tiene actualmente hallazgos abiertos en otros pilares.")}</p>'
+                return f'<p class="empty-state">{bi("No expensive services currently have open findings in other pillars.", "Ning\u00fan servicio costoso tiene actualmente hallazgos abiertos en otros pilares.", "Nenhum servi\u00e7o caro possui atualmente descobertas abertas em outros pilares.")}</p>'
             return render_table(cross_rows, [
                 ("Service", "Service", "Servicio", False),
                 ("CostDisplay", "6-mo Cost", "Costo 6 meses", True),
@@ -2576,74 +2874,74 @@ class DashboardGenerator:
         <div class="security-summary-band">
             <div>
                 <div class="security-eyebrow" style="color: var(--cp-success);">COST OPTIMIZATION</div>
-                <h2>{bi('Cost optimization opportunities', 'Oportunidades de optimizaci\u00f3n de costos')}</h2>
-                <p>{bi('Right-sizing, idle/orphaned assets, Advisor cost recommendations, and reservation coverage in one view.', 'Ajuste de tama\u00f1o, activos inactivos/hu\u00e9rfanos, recomendaciones de costos de Advisor y cobertura de reservas en una sola vista.')}</p>
+                <h2>{bi('Cost optimization opportunities', 'Oportunidades de optimizaci\u00f3n de costos', 'Oportunidades de otimiza\u00e7\u00e3o de custos')}</h2>
+                <p>{bi('Right-sizing, idle/orphaned assets, Advisor cost recommendations, and reservation coverage in one view.', 'Ajuste de tama\u00f1o, activos inactivos/hu\u00e9rfanos, recomendaciones de costos de Advisor y cobertura de reservas en una sola vista.', 'Ajuste de tamanho, ativos ociosos/\u00f3rf\u00e3os, recomenda\u00e7\u00f5es de custo do Advisor e cobertura de reservas em uma \u00fanica vis\u00e3o.')}</p>
             </div>
             <div class="security-score-mark" style="color: var(--cp-success);">{savings_text}</div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Cost trends', 'Tendencias de costos')}</div>
-            {cost_trend_chart if cost_trend_chart else f'<p class="empty-state">{bi("No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).")}</p>'}
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Cost trends', 'Tendencias de costos', 'Tend\u00eancias de custos')}</div>
+            {cost_trend_chart if cost_trend_chart else f'<p class="empty-state">{bi("No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).", "Nenhum dado de custo real encontrado (requer a fun\u00e7\u00e3o Cost Management Reader).")}</p>'}
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Cost by service', 'Costo por servicio')}</h3>{cost_by_service_bars}</div>
-                <div class="security-panel"><h3>{bi('Cost by subscription', 'Costo por suscripci\u00f3n')}</h3>{cost_by_subscription_bars}</div>
+                <div class="security-panel"><h3>{bi('Cost by service', 'Costo por servicio', 'Custo por servi\u00e7o')}</h3>{cost_by_service_bars}</div>
+                <div class="security-panel"><h3>{bi('Cost by subscription', 'Costo por suscripci\u00f3n', 'Custo por assinatura')}</h3>{cost_by_subscription_bars}</div>
             </div>
             <div class="security-panel">
-                <h3>{bi('Cost by region', 'Costo por regi\u00f3n')}</h3>
+                <h3>{bi('Cost by region', 'Costo por regi\u00f3n', 'Custo por regi\u00e3o')}</h3>
                 {cost_by_region_bars}
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Budgets vs. actual spend', 'Presupuestos vs. gasto real')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Budgets vs. actual spend', 'Presupuestos vs. gasto real', 'Or\u00e7amentos vs. gasto real')}</div>
             {budget_bars_html}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-danger);">{bi('Expensive services with open risk findings', 'Servicios costosos con hallazgos de riesgo abiertos')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-danger);">{bi('Expensive services with open risk findings', 'Servicios costosos con hallazgos de riesgo abiertos', 'Servi\u00e7os caros com descobertas de risco abertas')}</div>
             {expensive_at_risk_table}
         </div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o', 'Oportunidades de ajuste de tamanho')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales')}</h3>{render_distribution(vm_rightsizing)}{vm_table}</div>
-                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL')}</h3>{render_distribution(sql_rightsizing)}{sql_table}</div>
+                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales', 'M\u00e1quinas Virtuais')}</h3>{render_distribution(vm_rightsizing)}{vm_table}</div>
+                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL', 'Bancos de Dados SQL')}</h3>{render_distribution(sql_rightsizing)}{sql_table}</div>
             </div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('App Service Plans', 'Planes de App Service')}</h3>{render_distribution(plan_rightsizing)}{plan_table}</div>
-                <div class="security-panel"><h3>{bi('Storage Accounts', 'Cuentas de Almacenamiento')}</h3>{render_distribution(storage_activity)}{storage_table}</div>
+                <div class="security-panel"><h3>{bi('App Service Plans', 'Planes de App Service', 'Planos do App Service')}</h3>{render_distribution(plan_rightsizing)}{plan_table}</div>
+                <div class="security-panel"><h3>{bi('Storage Accounts', 'Cuentas de Almacenamiento', 'Contas de Armazenamento')}</h3>{render_distribution(storage_activity)}{storage_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Idle and orphaned resources', 'Recursos inactivos y hu\u00e9rfanos')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Idle and orphaned resources', 'Recursos inactivos y hu\u00e9rfanos', 'Recursos ociosos e \u00f3rf\u00e3os')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Deallocated VMs', 'VMs Desasignadas')}</h3>{dealloc_table}</div>
-                <div class="security-panel"><h3>{bi('Unattached Managed Disks', 'Discos Administrados No Adjuntos')}</h3>{unattached_disks_table}</div>
+                <div class="security-panel"><h3>{bi('Deallocated VMs', 'VMs Desasignadas', 'VMs Desalocadas')}</h3>{dealloc_table}</div>
+                <div class="security-panel"><h3>{bi('Unattached Managed Disks', 'Discos Administrados No Adjuntos', 'Discos Gerenciados N\u00e3o Anexados')}</h3>{unattached_disks_table}</div>
             </div>
             <div class="security-panel">
-                <h3>{bi('Orphaned resources (all types)', 'Recursos hu\u00e9rfanos (todos los tipos)')}</h3>
+                <h3>{bi('Orphaned resources (all types)', 'Recursos hu\u00e9rfanos (todos los tipos)', 'Recursos \u00f3rf\u00e3os (todos os tipos)')}</h3>
                 {orphaned_table}
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Actual spend (last 6 months)', 'Gasto real (\u00faltimos 6 meses)')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Actual spend (last 6 months)', 'Gasto real (\u00faltimos 6 meses)', 'Gasto real (\u00faltimos 6 meses)')}</div>
             {actual_cost_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Extended FinOps checks', 'Verificaciones FinOps extendidas')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Extended FinOps checks', 'Verificaciones FinOps extendidas', 'Verifica\u00e7\u00f5es FinOps estendidas')}</div>
             {extended_recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Advisor cost recommendations', 'Recomendaciones de costos de Advisor')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Advisor cost recommendations', 'Recomendaciones de costos de Advisor', 'Recomenda\u00e7\u00f5es de custo do Advisor')}</div>
             {cost_recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Reservation and Savings Plan opportunities', 'Oportunidades de Reservas y Planes de Ahorro')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Reservation and Savings Plan opportunities', 'Oportunidades de Reservas y Planes de Ahorro', 'Oportunidades de Reservas e Planos de Economia')}</div>
             {reservation_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Action items', 'Elementos de acción')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
             {self._render_actions_for_pillar("Cost Optimization")}
         </div>"""
 
@@ -2661,12 +2959,12 @@ class DashboardGenerator:
         resources_html = ""
         if action.get("resources"):
             resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
-        severity_badge = bi(action['severity'].upper(), SEVERITY_ES.get(action['severity'], action['severity'].upper()))
+        severity_badge = bi(str(action['severity']).upper(), str(SEVERITY_ES.get(action['severity'], action['severity'].upper())), str(SEVERITY_PT.get(action['severity'], action['severity'].upper())))
         pillar_tag_html = ""
         if show_pillar:
-            pillar_tag_html = f"<span class='pillar-tag'>{bi(action['pillar'], PILLAR_ES.get(action['pillar'], action['pillar']))}</span>"
-        title_text = bi(action['title'], action.get('title_es', action['title']))
-        desc_text = bi(action['description'], action.get('description_es', action['description']))
+            pillar_tag_html = f"<span class='pillar-tag'>{bi(str(action['pillar']), str(PILLAR_ES.get(action['pillar'], action['pillar'])), str(PILLAR_PT.get(action['pillar'], action['pillar'])))}</span>"
+        title_text = bi(action['title'], action.get('title_es', action['title']), action.get('title_pt', action['title']))
+        desc_text = bi(action['description'], action.get('description_es', action['description']), action.get('description_pt', action['description']))
         item_id = self._action_item_id(action)
         return f"""
             <div class="action-item" data-item-id="{item_id}" data-pillar="{escape(action['pillar'])}" data-severity="{action['severity']}" style="border-left: 4px solid {color};">
@@ -2687,7 +2985,7 @@ class DashboardGenerator:
         """Render the action-item cards for a single pillar (used by the dedicated pillar tabs)."""
         items = [a for a in self.engine.action_items if a["pillar"] == pillar]
         if not items:
-            return f'<div class="action-list" data-pillar="{escape(pillar)}"><p class="empty-state">{bi("No action items for this pillar.", "Sin elementos de acci\u00f3n para este pilar.")}</p></div>'
+            return f'<div class="action-list" data-pillar="{escape(pillar)}"><p class="empty-state">{bi("No action items for this pillar.", "Sin elementos de acci\u00f3n para este pilar.", "Sem itens de a\u00e7\u00e3o para este pilar.")}</p></div>'
         cards = "".join(self._render_action_card(action, i, show_pillar=False) for i, action in enumerate(items, 1))
         return f'<div class="action-list" data-pillar="{escape(pillar)}">{cards}</div>'
 
@@ -2695,14 +2993,14 @@ class DashboardGenerator:
         """Render the subcategory weight/health breakdown table for a single pillar (used by the dedicated pillar tabs)."""
         rows = self.engine.breakdowns.get(pillar, {}).get("rows", [])
         if not rows:
-            return f'<p class="empty-state">{bi("Score breakdown unavailable.", "Desglose de puntaje no disponible.")}</p>'
+            return f'<p class="empty-state">{bi("Score breakdown unavailable.", "Desglose de puntaje no disponible.", "Detalhamento de pontua\u00e7\u00e3o indispon\u00edvel.")}</p>'
         rows_html = "".join(
-            f"<tr><td>{bi(r['subcategory'], SUBCATEGORY_ES.get(r['subcategory'], r['subcategory']))}</td><td class='num'>{r['weight']}</td>"
+            f"<tr><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
             f"<td class='num'>{r['healthy']}/{r['total']}</td><td class='num'>{r['pct']}%</td></tr>"
             for r in rows
         )
         return f"""<div class="security-table-wrap"><table>
-            <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda')}</th><th>{bi('Weight', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total')}</th><th>{bi('Score', 'Puntaje')}</th></tr></thead>
+            <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda', 'Subcategoria')}</th><th>{bi('Weight', 'Peso', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total', 'Saud\u00e1vel/Total')}</th><th>{bi('Score', 'Puntaje', 'Pontua\u00e7\u00e3o')}</th></tr></thead>
             <tbody>{rows_html}</tbody>
         </table></div>"""
 
@@ -2720,8 +3018,8 @@ class DashboardGenerator:
 
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
-            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
@@ -2732,8 +3030,8 @@ class DashboardGenerator:
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
-                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
-                less_text = bi("Show less", "Mostrar menos")
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s", f"+ {len(rows) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
                 more = (
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
@@ -2766,14 +3064,14 @@ class DashboardGenerator:
 
         score = self.engine.scores.get("Reliability", 0)
         stats = [
-            (f"{score}/100", bi("Reliability Score", "Puntaje de Confiabilidad"), "security-accent"),
-            (len(vms_no_zone), bi("VMs without Availability Zone", "VMs sin Zona de Disponibilidad"), "security-warning" if vms_no_zone else ""),
-            (len(backups), bi("Backup Vaults Found", "Vaults de Backup Encontrados"), "" if backups else "security-danger"),
-            (len(vnets_no_ddos), bi("VNets without DDoS Protection", "VNets sin Protecci\u00f3n DDoS"), "security-warning" if vnets_no_ddos else ""),
-            (len(reliability_recs), bi("Advisor Reliability Recs", "Recom. de Confiabilidad"), ""),
-            (len(high_impact), bi("High-Impact Recommendations", "Recomendaciones de Alto Impacto"), "security-danger" if high_impact else ""),
-            (len(failed_backups), bi("Backup Items Failing/Not Protected", "Elementos de Backup Fallidos/No Protegidos"), "security-danger" if failed_backups else ""),
-            (len(active_health_events), bi("Active Resource Health Events", "Eventos Activos de Resource Health"), "security-danger" if active_health_events else ""),
+            (f"{score}/100", bi("Reliability Score", "Puntaje de Confiabilidad", "Pontua\u00e7\u00e3o de Confiabilidade"), "security-accent"),
+            (len(vms_no_zone), bi("VMs without Availability Zone", "VMs sin Zona de Disponibilidad", "VMs sem Zona de Disponibilidade"), "security-warning" if vms_no_zone else ""),
+            (len(backups), bi("Backup Vaults Found", "Vaults de Backup Encontrados", "Vaults de Backup Encontrados"), "" if backups else "security-danger"),
+            (len(vnets_no_ddos), bi("VNets without DDoS Protection", "VNets sin Protecci\u00f3n DDoS", "VNets sem Prote\u00e7\u00e3o DDoS"), "security-warning" if vnets_no_ddos else ""),
+            (len(reliability_recs), bi("Advisor Reliability Recs", "Recom. de Confiabilidad", "Recom. de Confiabilidade"), ""),
+            (len(high_impact), bi("High-Impact Recommendations", "Recomendaciones de Alto Impacto", "Recomenda\u00e7\u00f5es de Alto Impacto"), "security-danger" if high_impact else ""),
+            (len(failed_backups), bi("Backup Items Failing/Not Protected", "Elementos de Backup Fallidos/No Protegidos", "Itens de Backup Falhando/N\u00e3o Protegidos"), "security-danger" if failed_backups else ""),
+            (len(active_health_events), bi("Active Resource Health Events", "Eventos Activos de Resource Health", "Eventos Ativos de Resource Health"), "security-danger" if active_health_events else ""),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
@@ -2826,39 +3124,39 @@ class DashboardGenerator:
         <div class="security-summary-band">
             <div>
                 <div class="security-eyebrow" style="color: var(--cp-link);">RELIABILITY</div>
-                <h2>{bi('High availability and disaster recovery', 'Alta disponibilidad y recuperaci\u00f3n ante desastres')}</h2>
-                <p>{bi('Availability Zones, backup coverage, DDoS protection, and Advisor high-availability recommendations in one view.', 'Zonas de Disponibilidad, cobertura de backup, protecci\u00f3n DDoS y recomendaciones de alta disponibilidad de Advisor en una sola vista.')}</p>
+                <h2>{bi('High availability and disaster recovery', 'Alta disponibilidad y recuperaci\u00f3n ante desastres', 'Alta disponibilidade e recupera\u00e7\u00e3o de desastres')}</h2>
+                <p>{bi('Availability Zones, backup coverage, DDoS protection, and Advisor high-availability recommendations in one view.', 'Zonas de Disponibilidad, cobertura de backup, protecci\u00f3n DDoS y recomendaciones de alta disponibilidad de Advisor en una sola vista.', 'Zonas de Disponibilidade, cobertura de backup, prote\u00e7\u00e3o DDoS e recomenda\u00e7\u00f5es de alta disponibilidade do Advisor em uma \u00fanica vis\u00e3o.')}</p>
             </div>
             <div class="security-score-mark" style="color: var(--cp-link);">{score}/100</div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('VMs without Availability Zones', 'VMs sin Zonas de Disponibilidad')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('VMs without Availability Zones', 'VMs sin Zonas de Disponibilidad', 'VMs sem Zonas de Disponibilidade')}</div>
             {vms_table}
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Backup vault coverage', 'Cobertura de vaults de backup')}</h3>{backups_table}</div>
-            <div class="security-panel"><h3>{bi('VNets without DDoS Protection', 'VNets sin Protecci\u00f3n DDoS')}</h3>{vnets_table}</div>
+            <div class="security-panel"><h3>{bi('Backup vault coverage', 'Cobertura de vaults de backup', 'Cobertura de vaults de backup')}</h3>{backups_table}</div>
+            <div class="security-panel"><h3>{bi('VNets without DDoS Protection', 'VNets sin Protecci\u00f3n DDoS', 'VNets sem Prote\u00e7\u00e3o DDoS')}</h3>{vnets_table}</div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Real backup coverage (protected items)', 'Cobertura real de backup (elementos protegidos)')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Real backup coverage (protected items)', 'Cobertura real de backup (elementos protegidos)', 'Cobertura real de backup (itens protegidos)')}</div>
             {protected_items_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Resource / Service Health events', 'Eventos de Resource Health / Service Health')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Resource / Service Health events', 'Eventos de Resource Health / Service Health', 'Eventos de Resource Health / Service Health')}</div>
             {health_events_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor', 'Recomenda\u00e7\u00f5es de confiabilidade do Advisor')}</div>
             {recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Score breakdown', 'Desglose de puntaje')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}</div>
             {self._render_subcategory_table("Reliability")}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Action items', 'Elementos de acci\u00f3n')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
             {self._render_actions_for_pillar("Reliability")}
         </div>"""
 
@@ -2875,8 +3173,8 @@ class DashboardGenerator:
 
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
-            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
@@ -2887,8 +3185,8 @@ class DashboardGenerator:
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
-                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
-                less_text = bi("Show less", "Mostrar menos")
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s", f"+ {len(rows) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
                 more = (
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
@@ -2903,10 +3201,10 @@ class DashboardGenerator:
 
         score = self.engine.scores.get("Performance Efficiency", 0)
         stats = [
-            (f"{score}/100", bi("Performance Score", "Puntaje de Rendimiento"), "security-accent"),
-            (len(saturated_vm), bi("Saturated VMs (>80% CPU)", "VMs Saturadas (>80% CPU)"), "security-danger" if saturated_vm else ""),
-            (len(saturated_sql), bi("Saturated SQL DBs", "BD SQL Saturadas"), "security-danger" if saturated_sql else ""),
-            (len(perf_recs), bi("Advisor Performance Recs", "Recom. de Rendimiento"), ""),
+            (f"{score}/100", bi("Performance Score", "Puntaje de Rendimiento", "Pontua\u00e7\u00e3o de Desempenho"), "security-accent"),
+            (len(saturated_vm), bi("Saturated VMs (>80% CPU)", "VMs Saturadas (>80% CPU)", "VMs Saturadas (>80% CPU)"), "security-danger" if saturated_vm else ""),
+            (len(saturated_sql), bi("Saturated SQL DBs", "BD SQL Saturadas", "BDs SQL Saturados"), "security-danger" if saturated_sql else ""),
+            (len(perf_recs), bi("Advisor Performance Recs", "Recom. de Rendimiento", "Recom. de Desempenho"), ""),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
@@ -2939,30 +3237,30 @@ class DashboardGenerator:
         <div class="security-summary-band">
             <div>
                 <div class="security-eyebrow" style="color: var(--cp-warning);">PERFORMANCE EFFICIENCY</div>
-                <h2>{bi('Workload scaling and utilization', 'Escalado y utilizaci\u00f3n de cargas de trabajo')}</h2>
-                <p>{bi('Saturated VMs and SQL databases, plus Advisor performance recommendations in one view.', 'VMs y bases de datos SQL saturadas, m\u00e1s recomendaciones de rendimiento de Advisor en una sola vista.')}</p>
+                <h2>{bi('Workload scaling and utilization', 'Escalado y utilizaci\u00f3n de cargas de trabajo', 'Escalonamento e utiliza\u00e7\u00e3o de cargas de trabalho')}</h2>
+                <p>{bi('Saturated VMs and SQL databases, plus Advisor performance recommendations in one view.', 'VMs y bases de datos SQL saturadas, m\u00e1s recomendaciones de rendimiento de Advisor en una sola vista.', 'VMs e bancos de dados SQL saturados, al\u00e9m das recomenda\u00e7\u00f5es de desempenho do Advisor em uma \u00fanica vis\u00e3o.')}</p>
             </div>
             <div class="security-score-mark" style="color: var(--cp-warning);">{score}/100</div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Resource saturation', 'Saturaci\u00f3n de recursos')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Resource saturation', 'Saturaci\u00f3n de recursos', 'Satura\u00e7\u00e3o de recursos')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales')}</h3>{vm_table}</div>
-                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL')}</h3>{sql_table}</div>
+                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales', 'M\u00e1quinas Virtuais')}</h3>{vm_table}</div>
+                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL', 'Bancos de Dados SQL')}</h3>{sql_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Advisor performance recommendations', 'Recomendaciones de rendimiento de Advisor')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Advisor performance recommendations', 'Recomendaciones de rendimiento de Advisor', 'Recomenda\u00e7\u00f5es de desempenho do Advisor')}</div>
             {recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Score breakdown', 'Desglose de puntaje')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}</div>
             {self._render_subcategory_table("Performance Efficiency")}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Action items', 'Elementos de acci\u00f3n')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
             {self._render_actions_for_pillar("Performance Efficiency")}
         </div>"""
 
@@ -2987,8 +3285,8 @@ class DashboardGenerator:
 
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
-                return f'<p class="empty-state">{bi(empty_en, empty_es)}</p>'
-            header = "".join(f"<th>{bi(label_en, label_es)}</th>" for _, label_en, label_es, _ in columns)
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
                 cells = "".join(
@@ -2999,8 +3297,8 @@ class DashboardGenerator:
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
-                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s")
-                less_text = bi("Show less", "Mostrar menos")
+                more_text = bi(f"+ {len(rows) - limit} more", f"+ {len(rows) - limit} m\u00e1s", f"+ {len(rows) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
                 more = (
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
@@ -3032,12 +3330,12 @@ class DashboardGenerator:
 
         score = self.engine.scores.get("Operational Excellence", 0)
         stats = [
-            (f"{score}/100", bi("OpEx Score", "Puntaje OpEx"), "security-accent"),
-            (len(no_diag), bi("Missing Diagnostic Settings", "Sin Configuraci\u00f3n de Diagn\u00f3stico"), "security-warning" if no_diag else ""),
-            (f"{len(untagged)}/{total_taggable}", bi("Untagged Resources", "Recursos sin Etiquetas"), "security-warning" if untagged else ""),
-            (len(locks), bi("Resource Locks", "Bloqueos de Recursos"), "" if locks else "security-danger"),
-            (len(non_compliant), bi("Non-Compliant Policy Evaluations", "Evaluaciones No Conformes"), "security-warning" if non_compliant else ""),
-            (len(opex_recs), bi("Advisor OpEx Recs", "Recom. OpEx"), ""),
+            (f"{score}/100", bi("OpEx Score", "Puntaje OpEx", "Pontua\u00e7\u00e3o OpEx"), "security-accent"),
+            (len(no_diag), bi("Missing Diagnostic Settings", "Sin Configuraci\u00f3n de Diagn\u00f3stico", "Sem Configura\u00e7\u00e3o de Diagn\u00f3stico"), "security-warning" if no_diag else ""),
+            (f"{len(untagged)}/{total_taggable}", bi("Untagged Resources", "Recursos sin Etiquetas", "Recursos sem Tags"), "security-warning" if untagged else ""),
+            (len(locks), bi("Resource Locks", "Bloqueos de Recursos", "Bloqueios de Recursos"), "" if locks else "security-danger"),
+            (len(non_compliant), bi("Non-Compliant Policy Evaluations", "Evaluaciones No Conformes", "Avalia\u00e7\u00f5es N\u00e3o Conformes"), "security-warning" if non_compliant else ""),
+            (len(opex_recs), bi("Advisor OpEx Recs", "Recom. OpEx", "Recom. OpEx"), ""),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
@@ -3072,31 +3370,31 @@ class DashboardGenerator:
         <div class="security-summary-band">
             <div>
                 <div class="security-eyebrow" style="color: var(--cp-accent);">OPERATIONAL EXCELLENCE</div>
-                <h2>{bi('Observability, tagging, and governance hygiene', 'Observabilidad, etiquetado e higiene de gobernanza')}</h2>
-                <p>{bi('Diagnostic settings coverage, tagging compliance, resource locks, and Advisor operational recommendations in one view.', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico, cumplimiento de etiquetado, bloqueos de recursos y recomendaciones operativas de Advisor en una sola vista.')}</p>
+                <h2>{bi('Observability, tagging, and governance hygiene', 'Observabilidad, etiquetado e higiene de gobernanza', 'Observabilidade, etiquetagem e higiene de governan\u00e7a')}</h2>
+                <p>{bi('Diagnostic settings coverage, tagging compliance, resource locks, and Advisor operational recommendations in one view.', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico, cumplimiento de etiquetado, bloqueos de recursos y recomendaciones operativas de Advisor en una sola vista.', 'Cobertura de configura\u00e7\u00e3o de diagn\u00f3stico, conformidade de etiquetagem, bloqueios de recursos e recomenda\u00e7\u00f5es operacionais do Advisor em uma \u00fanica vis\u00e3o.')}</p>
             </div>
             <div class="security-score-mark" style="color: var(--cp-accent);">{score}/100</div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Diagnostic settings coverage', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Diagnostic settings coverage', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico', 'Cobertura de configura\u00e7\u00e3o de diagn\u00f3stico')}</div>
             {diag_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Untagged resources', 'Recursos sin etiquetas')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Untagged resources', 'Recursos sin etiquetas', 'Recursos sem tags')}</div>
             {tags_table}
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos')}</h3>{locks_table}</div>
-            <div class="security-panel"><h3>{bi('Advisor operational excellence recommendations', 'Recomendaciones de excelencia operativa de Advisor')}</h3>{recs_table}</div>
+            <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos', 'Bloqueios de recursos')}</h3>{locks_table}</div>
+            <div class="security-panel"><h3>{bi('Advisor operational excellence recommendations', 'Recomendaciones de excelencia operativa de Advisor', 'Recomenda\u00e7\u00f5es de excel\u00eancia operacional do Advisor')}</h3>{recs_table}</div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Score breakdown', 'Desglose de puntaje')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}</div>
             {self._render_subcategory_table("Operational Excellence")}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Action items', 'Elementos de acci\u00f3n')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
             {self._render_actions_for_pillar("Operational Excellence")}
         </div>"""
 
@@ -3104,10 +3402,11 @@ class DashboardGenerator:
         """Render the 'why' behind each pillar score per the Advisor Score model."""
         b = self.engine.breakdowns
         sections = []
-        pillar_label = lambda p: bi(p, PILLAR_ES.get(p, p))
+        pillar_label = lambda p: bi(str(p), str(PILLAR_ES.get(p, p)), str(PILLAR_PT.get(p, p)))
         insufficient_note = bi(
             "Insufficient data — no discovered resource inventory (01_Discovery/ResourceSummary) to compute this pillar's score.",
-            "Datos insuficientes: no hay inventario de recursos descubiertos (01_Discovery/ResourceSummary) para calcular el puntaje de este pilar."
+            "Datos insuficientes: no hay inventario de recursos descubiertos (01_Discovery/ResourceSummary) para calcular el puntaje de este pilar.",
+            "Dados insuficientes: não há inventário de recursos descobertos (01_Discovery/ResourceSummary) para calcular a pontuação deste pilar."
         )
 
         def subcategory_card(pillar):
@@ -3118,14 +3417,14 @@ class DashboardGenerator:
                 <p class="breakdown-note">{insufficient_note}</p>
             </div>"""
             rows_html = "".join(
-                f"<tr><td>{bi(r['subcategory'], SUBCATEGORY_ES.get(r['subcategory'], r['subcategory']))}</td><td class='num'>{r['weight']}</td>"
+                f"<tr><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
                 f"<td class='num'>{r['healthy']}/{r['total']}</td><td class='num'>{r['pct']}%</td></tr>"
                 for r in info["rows"]
             )
             return f"""<div class="breakdown-card">
                 <h4>{pillar_label(pillar)} <span class="breakdown-score">{self.engine.scores[pillar]}/100</span></h4>
                 <table>
-                    <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda')}</th><th>{bi('Weight', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total')}</th><th>{bi('Score', 'Puntaje')}</th></tr></thead>
+                    <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda', 'Subcategoria')}</th><th>{bi('Weight', 'Peso', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total', 'Saud\u00e1vel/Total')}</th><th>{bi('Score', 'Puntaje', 'Pontua\u00e7\u00e3o')}</th></tr></thead>
                     <tbody>{rows_html}</tbody>
                 </table>
             </div>"""
@@ -3137,25 +3436,27 @@ class DashboardGenerator:
         security = b.get("Security", {})
         if security.get("available"):
             findings_html = "".join(
-                f"<tr><td>{bi(label_en, label_es)}</td><td class='num'>{count}</td></tr>"
-                for label_en, label_es, count in security.get("findings", [])
+                f"<tr><td>{bi(label_en, label_es, label_pt)}</td><td class='num'>{count}</td></tr>"
+                for label_en, label_es, label_pt, count in security.get("findings", [])
             )
             note = bi(
                 f"Microsoft Defender Secure Score average across {security.get('subscriptions_scored', 0)} subscription(s): <strong>{security.get('secure_score_pct')}%</strong>.",
-                f"Promedio del Secure Score de Microsoft Defender en {security.get('subscriptions_scored', 0)} suscripci\u00f3n(es): <strong>{security.get('secure_score_pct')}%</strong>."
+                f"Promedio del Secure Score de Microsoft Defender en {security.get('subscriptions_scored', 0)} suscripci\u00f3n(es): <strong>{security.get('secure_score_pct')}%</strong>.",
+                f"M\u00e9dia do Secure Score da Microsoft Defender em {security.get('subscriptions_scored', 0)} assinatura(s): <strong>{security.get('secure_score_pct')}%</strong>."
             )
             sections.append(f"""<div class="breakdown-card">
                 <h4>{pillar_label('Security')} <span class="breakdown-score">{self.engine.scores['Security']}/100</span></h4>
                 <p class="breakdown-note">{note}</p>
                 <table>
-                    <thead><tr><th>{bi('Finding Category', 'Categor\u00eda de Hallazgo')}</th><th>{bi('Count', 'Cantidad')}</th></tr></thead>
+                    <thead><tr><th>{bi('Finding Category', 'Categor\u00eda de Hallazgo', 'Categoria da Descoberta')}</th><th>{bi('Count', 'Cantidad', 'Quantidade')}</th></tr></thead>
                     <tbody>{findings_html}</tbody>
                 </table>
             </div>""")
         else:
             note = bi(
-                "Insufficient data — no Defender Secure Score records found in 04_Governance/SecureScores.",
-                "Datos insuficientes: no se encontraron registros de Secure Score de Defender en 04_Governance/SecureScores."
+                "Insufficient data \u2014 no Defender Secure Score records found in 04_Governance/SecureScores.",
+                "Datos insuficientes: no se encontraron registros de Secure Score de Defender en 04_Governance/SecureScores.",
+                "Dados insuficientes: nenhum registro de Secure Score do Defender encontrado em 04_Governance/SecureScores."
             )
             sections.append(f"""<div class="breakdown-card">
                 <h4>{pillar_label('Security')}</h4>
@@ -3171,12 +3472,12 @@ class DashboardGenerator:
                 source_healthy = max(0, cost["total"] - affected)
                 source_score = round((source_healthy / cost["total"]) * 100)
                 source_rows.append(
-                    f"<tr><td>{bi(name, COST_SOURCE_ES.get(name, name))}</td>"
+                    f"<tr><td>{bi(str(name), str(COST_SOURCE_ES.get(name, name)), str(COST_SOURCE_PT.get(name, name)))}</td>"
                     f"<td class='num'>{source['count']} / {affected}</td>"
                     f"<td class='num'>{source_healthy}/{cost['total']}</td>"
                     f"<td class='num'>{source_score}%</td></tr>"
                 )
-            combined_label = bi("Combined (deduplicated)", "Combinado (sin duplicados)")
+            combined_label = bi("Combined (deduplicated)", "Combinado (sin duplicados)", "Combinado (sem duplicatas)")
             combined_findings = sum(source["count"] for source in cost.get("sources", []))
             source_rows.append(
                 f"<tr><td><strong>{combined_label}</strong></td>"
@@ -3187,7 +3488,8 @@ class DashboardGenerator:
             sources_html = "".join(source_rows)
             note = bi(
                 "Findings/Affected shows finding count first and unique affected scopes or resources second. The combined row deduplicates identifiers.",
-                "Hallazgos/Afectados muestra primero los hallazgos y luego los ámbitos o recursos únicos afectados. La fila combinada elimina duplicados."
+                "Hallazgos/Afectados muestra primero los hallazgos y luego los ámbitos o recursos únicos afectados. La fila combinada elimina duplicados.",
+                "Descobertas/Afetados mostra primeiro a contagem de descobertas e depois os escopos ou recursos únicos afetados. A linha combinada remove duplicatas."
             )
             sections.append(f"""<div class="breakdown-card cost-breakdown-card">
                 <h4>{pillar_label('Cost Optimization')} <span class="breakdown-score">{self.engine.scores['Cost Optimization']}/100</span></h4>
@@ -3195,7 +3497,7 @@ class DashboardGenerator:
                 <div class="breakdown-table-wrap">
                     <table>
                         <colgroup><col class="cost-source-col"><col class="cost-findings-col"><col><col></colgroup>
-                        <thead><tr><th>{bi('Finding Source', 'Fuente del Hallazgo')}</th><th>{bi('Findings/Affected', 'Hallazgos/Afectados')}</th><th>{bi('Healthy/Total', 'Saludable/Total')}</th><th>{bi('Score', 'Puntaje')}</th></tr></thead>
+                        <thead><tr><th>{bi('Finding Source', 'Fuente del Hallazgo', 'Fonte da Descoberta')}</th><th>{bi('Findings/Affected', 'Hallazgos/Afectados', 'Descobertas/Afetados')}</th><th>{bi('Healthy/Total', 'Saludable/Total', 'Saudável/Total')}</th><th>{bi('Score', 'Puntaje', 'Pontuação')}</th></tr></thead>
                         <tbody>{sources_html}</tbody>
                     </table>
                 </div>
@@ -3203,7 +3505,8 @@ class DashboardGenerator:
         else:
             note = bi(
                 "Insufficient data — no discovered resource inventory to compute this pillar's score.",
-                "Datos insuficientes: no hay inventario de recursos descubiertos para calcular el puntaje de este pilar."
+                "Datos insuficientes: no hay inventario de recursos descubiertos para calcular el puntaje de este pilar.",
+                "Dados insuficientes: não há inventário de recursos descobertos para calcular a pontuação deste pilar."
             )
             sections.append(f"""<div class="breakdown-card">
                 <h4>{pillar_label('Cost Optimization')}</h4>
@@ -3245,7 +3548,7 @@ class DashboardGenerator:
                 <div class="pillar-bar">
                     <div class="pillar-bar-fill" style="width:{sc}%; background:{color};"></div>
                 </div>
-                <div class="pillar-name">{status_icon} {bi(pillar, PILLAR_ES.get(pillar, pillar))}</div>
+                <div class="pillar-name">{status_icon} {bi(pillar, PILLAR_ES.get(pillar, pillar), PILLAR_PT.get(pillar, pillar))}</div>
             </div>"""
         
         # Build resource summary table
@@ -3371,8 +3674,8 @@ body {{
 .view-tab-thumb {{
     position: absolute; top: 4px; left: 0; height: calc(100% - 8px); width: 0;
     background: var(--cp-surface); border-radius: 980px; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-    transition: transform 0.4s var(--cp-ease), width 0.4s var(--cp-ease);
-    will-change: transform, width; z-index: 0; pointer-events: none;
+    transition: transform 0.4s var(--cp-ease), width 0.4s var(--cp-ease), top 0.4s var(--cp-ease), height 0.4s var(--cp-ease);
+    will-change: transform, width, top, height; z-index: 0; pointer-events: none;
 }}
 .view-tab {{
     border: 0; background: transparent; color: var(--cp-text-muted); cursor: pointer;
@@ -3629,6 +3932,27 @@ body {{
 .scope-detail summary {{ cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
 .scope-detail .scope-id {{ color: var(--cp-text-muted); font-weight: 400; }}
 .scope-detail p {{ font-size: 12px; margin: 8px 0; }}
+.rg-explorer-wrap {{ display: flex; flex-direction: column; gap: 8px; }}
+.rg-explorer {{
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); padding: 10px 14px;
+}}
+.rg-explorer summary {{ cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+.rg-explorer summary .az-icon {{ width: 18px; height: 18px; }}
+.rg-explorer .scope-id {{ color: var(--cp-text-muted); font-weight: 400; }}
+.rg-explorer-list {{
+    margin-top: 10px; padding-left: 16px; border-left: 2px solid var(--cp-border);
+    display: flex; flex-direction: column; gap: 8px;
+}}
+.rg-explorer-item {{ border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); padding: 8px 12px; }}
+.rg-explorer-item summary {{ cursor: pointer; font-size: 12.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+.rgx-resource-list {{
+    list-style: none; margin: 8px 0 0; padding-left: 16px; border-left: 2px dashed var(--cp-border);
+    display: flex; flex-direction: column; gap: 5px;
+}}
+.rgx-resource-list li {{ font-size: 12px; display: flex; align-items: center; gap: 8px; }}
+.rgx-resource-list .resource-name {{ flex: 1 1 auto; }}
+.rgx-resource-list .resource-icon {{ width: 16px; height: 16px; flex: 0 0 auto; }}
+.rgx-resource-list .resource-more {{ color: var(--cp-text-muted); font-style: italic; }}
 .mini-table {{ width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }}
 .mini-table th, .mini-table td {{ border: 1px solid var(--cp-border); padding: 4px 8px; text-align: left; }}
 .table-more-note {{
@@ -3765,10 +4089,12 @@ tr:hover td {{ background: var(--cp-accent-soft); }}
     border-top: 1px solid var(--cp-border); margin-top: 32px;
 }}
 
-/* Header controls and bilingual toggle (default: English shown, Spanish hidden) */
-.i18n-es {{ display: none; }}
-body.lang-es .i18n-en {{ display: none; }}
+/* Header controls and trilingual toggle (default: English shown, Spanish/Portuguese hidden) */
+.i18n-es, .i18n-pt {{ display: none; }}
+body.lang-es .i18n-en, body.lang-es .i18n-pt {{ display: none; }}
 body.lang-es .i18n-es {{ display: inline; }}
+body.lang-pt .i18n-en, body.lang-pt .i18n-es {{ display: none; }}
+body.lang-pt .i18n-pt {{ display: inline; }}
 .header-controls {{
     position: absolute; top: 24px; right: 28px;
     display: flex; gap: 8px;
@@ -3795,20 +4121,20 @@ body.lang-es .i18n-es {{ display: inline; }}
     </div>
     <div class="header-brand">
         {self._azure_icon("azure-logo", "az-icon header-logo")}
-        <h1>{bi("Azure WAF/CAF Workshop", "Taller Azure WAF/CAF")}<span class="header-title-sub">{bi("Discovery Report", "Informe de Descubrimiento")}</span></h1>
+        <h1>{bi("Azure WAF/CAF Workshop", "Taller Azure WAF/CAF", "Workshop Azure WAF/CAF")}<span class="header-title-sub">{bi("Discovery Report", "Informe de Descubrimiento", "Relatório de Descoberta")}</span></h1>
     </div>
-    <div class="subtitle">{bi("Generated", "Generado")}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {bi("Consolidated view across all discovery phases", "Vista consolidada de todas las fases de descubrimiento")}</div>
+    <div class="subtitle">{bi("Generated", "Generado", "Gerado")}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {bi("Consolidated view across all discovery phases", "Vista consolidada de todas las fases de descubrimiento", "Visão consolidada de todas as fases de descoberta")}</div>
 </div>
 
 <div class="view-tabs" id="viewTabsBar" role="tablist" aria-label="Dashboard views">
     <span id="viewTabThumb" class="view-tab-thumb" aria-hidden="true"></span>
-    <button id="overviewTab" class="view-tab" role="tab" aria-selected="true" aria-controls="overviewView" onclick="setDashboardView('overview')" type="button">{bi('Overview', 'Resumen')}</button>
-    <button id="reliabilityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="reliabilityView" onclick="setDashboardView('reliability')" type="button">{bi('Reliability', 'Confiabilidad')}</button>
-    <button id="securityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="securityView" onclick="setDashboardView('security')" type="button">{bi('Security', 'Seguridad')}</button>
-    <button id="costTab" class="view-tab" role="tab" aria-selected="false" aria-controls="costView" onclick="setDashboardView('cost')" type="button">{bi('Cost Opt', 'Optim. Costos')}</button>
-    <button id="operationalTab" class="view-tab" role="tab" aria-selected="false" aria-controls="operationalView" onclick="setDashboardView('operational')" type="button">{bi('OpEx', 'Exc. Operativa')}</button>
-    <button id="performanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="performanceView" onclick="setDashboardView('performance')" type="button">{bi('Performance', 'Rendimiento')}</button>
-    <button id="governanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="governanceView" onclick="setDashboardView('governance')" type="button">{bi('Governance', 'Gobernanza')}</button>
+    <button id="overviewTab" class="view-tab" role="tab" aria-selected="true" aria-controls="overviewView" onclick="setDashboardView('overview')" type="button">{bi('Overview', 'Resumen', 'Visão geral')}</button>
+    <button id="reliabilityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="reliabilityView" onclick="setDashboardView('reliability')" type="button">{bi('Reliability', 'Confiabilidad', 'Confiabilidade')}</button>
+    <button id="securityTab" class="view-tab" role="tab" aria-selected="false" aria-controls="securityView" onclick="setDashboardView('security')" type="button">{bi('Security', 'Seguridad', 'Segurança')}</button>
+    <button id="costTab" class="view-tab" role="tab" aria-selected="false" aria-controls="costView" onclick="setDashboardView('cost')" type="button">{bi('Cost Opt', 'Optim. Costos', 'Otim. Custos')}</button>
+    <button id="operationalTab" class="view-tab" role="tab" aria-selected="false" aria-controls="operationalView" onclick="setDashboardView('operational')" type="button">{bi('OpEx', 'Exc. Operativa', 'Exc. Operacional')}</button>
+    <button id="performanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="performanceView" onclick="setDashboardView('performance')" type="button">{bi('Performance', 'Rendimiento', 'Desempenho')}</button>
+    <button id="governanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="governanceView" onclick="setDashboardView('governance')" type="button">{bi('Governance', 'Gobernanza', 'Governança')}</button>
 </div>
 
 <main id="overviewView" class="dashboard-view" role="tabpanel" aria-labelledby="overviewTab">
@@ -3816,7 +4142,7 @@ body.lang-es .i18n-es {{ display: inline; }}
 <div class="score-section">
     <div class="overall-score">
         <div class="score-circle"></div>
-        <div class="score-label">{bi("Overall WAF Score", "Puntaje General WAF")}</div>
+        <div class="score-label">{bi("Overall WAF Score", "Puntaje General WAF", "Pontuação Geral WAF")}</div>
     </div>
     <div class="pillars-grid">
         {pillar_cards}
@@ -3825,17 +4151,17 @@ body.lang-es .i18n-es {{ display: inline; }}
 
 <!-- Stats Row -->
 <div class="stats-row">
-    <div class="stat-box"><div class="value">{total_subs}</div><div class="label">{bi("Subscriptions", "Suscripciones")}</div></div>
-    <div class="stat-box"><div class="value">{total_resources:,}</div><div class="label">{bi("Total Resources", "Recursos Totales")}</div></div>
-    <div class="stat-box"><div class="value" id="totalActionsStat">{total_actions}</div><div class="label">{bi("Action Items", "Elementos de Acci\u00f3n")}</div></div>
-    <div class="stat-box"><div class="value" id="criticalActionsStat" style="color:var(--cp-danger);">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta")}</div></div>
+    <div class="stat-box"><div class="value">{total_subs}</div><div class="label">{bi("Subscriptions", "Suscripciones", "Assinaturas")}</div></div>
+    <div class="stat-box"><div class="value">{total_resources:,}</div><div class="label">{bi("Total Resources", "Recursos Totales", "Total de Recursos")}</div></div>
+    <div class="stat-box"><div class="value" id="totalActionsStat">{total_actions}</div><div class="label">{bi("Action Items", "Elementos de Acci\u00f3n", "Itens de Ação")}</div></div>
+    <div class="stat-box"><div class="value" id="criticalActionsStat" style="color:var(--cp-danger);">{critical_actions}</div><div class="label">{bi("Critical/High Priority", "Prioridad Cr\u00edtica/Alta", "Prioridade Crítica/Alta")}</div></div>
 </div>
 
 <!-- Score Methodology -->
 <div class="section">
-    <div class="section-title">📐 {bi("Score Methodology (Microsoft Advisor Score model)", "Metodolog\u00eda de Puntuaci\u00f3n (modelo de Azure Advisor Score)")}</div>
+    <div class="section-title">📐 {bi("Score Methodology (Microsoft Advisor Score model)", "Metodolog\u00eda de Puntuaci\u00f3n (modelo de Azure Advisor Score)", "Metodologia de Pontuação (modelo do Azure Advisor Score)")}</div>
     <div class="methodology-note">
-        {bi("Pillar scores follow the official", "Los puntajes de cada pilar siguen la f\u00f3rmula oficial de")} <a href="https://learn.microsoft.com/en-us/azure/advisor/advisor-score#calculation-of-advisor-score" target="_blank">Azure Advisor Score</a>
+        {bi("Pillar scores follow the official", "Los puntajes de cada pilar siguen la f\u00f3rmula oficial de", "As pontuações de cada pilar seguem a fórmula oficial do")} <a href="https://learn.microsoft.com/en-us/azure/advisor/advisor-score#calculation-of-advisor-score" target="_blank">Azure Advisor Score</a>
         {bi(
             "formulas and subcategory weights instead of an arbitrary point system. Security uses the Microsoft Defender Secure Score directly. "
             "Reliability, Performance, and Operational Excellence use Microsoft\u2019s published subcategory weights \u2014 recommendations are mapped to "
@@ -3846,7 +4172,12 @@ body.lang-es .i18n-es {{ display: inline; }}
             "Confiabilidad, Rendimiento y Excelencia Operativa usan los pesos de subcategor\u00eda publicados por Microsoft: las recomendaciones se "
             "asignan a subcategor\u00edas mediante coincidencia de palabras clave (Azure Resource Graph no expone la etiqueta interna de subcategor\u00eda de Advisor), "
             "y el inventario de recursos descubiertos se usa como el conjunto compartido de 'recursos totales aplicables'. Costo usa una proporci\u00f3n de "
-            "recursos saludables en lugar de ponderaci\u00f3n por costo de lista, ya que esta herramienta no llama a la API de precios de Azure."
+            "recursos saludables en lugar de ponderaci\u00f3n por costo de lista, ya que esta herramienta no llama a la API de precios de Azure.",
+            "e os pesos de subcategoria em vez de um sistema de pontos arbitrário. Segurança usa diretamente o Secure Score do Microsoft Defender. "
+            "Confiabilidade, Desempenho e Excelência Operacional usam os pesos de subcategoria publicados pela Microsoft — as recomendações são "
+            "mapeadas para subcategorias por correspondência de palavras-chave (o Azure Resource Graph não expõe a tag interna de subcategoria do Advisor), "
+            "e o inventário de recursos descobertos é usado como o conjunto compartilhado de 'total de recursos aplicáveis'. Custo usa uma proporção de "
+            "recursos saudáveis em vez de ponderação por custo de varejo, já que esta ferramenta não chama a API de Preços de Varejo do Azure."
         )}
     </div>
     <div class="breakdown-grid">
@@ -3856,44 +4187,44 @@ body.lang-es .i18n-es {{ display: inline; }}
 
 <!-- Recommended Azure Resources -->
 <div class="section resource-recommendations">
-    <div class="section-title security-title">{bi('Recommended Azure resources & services', 'Recursos y servicios de Azure recomendados')}</div>
-    <p class="resource-rec-intro">{bi('These suggestions are derived from all generated recommendations and action items. Validate architecture, licensing, and cost before deployment.', 'Estas sugerencias se derivan de todas las recomendaciones y elementos de acción generados. Valide la arquitectura, las licencias y el costo antes de implementar.')}</p>
+    <div class="section-title security-title">{bi('Recommended Azure resources & services', 'Recursos y servicios de Azure recomendados', 'Recursos e serviços do Azure recomendados')}</div>
+    <p class="resource-rec-intro">{bi('These suggestions are derived from all generated recommendations and action items. Validate architecture, licensing, and cost before deployment.', 'Estas sugerencias se derivan de todas las recomendaciones y elementos de acción generados. Valide la arquitectura, las licencias y el costo antes de implementar.', 'Estas sugestões são derivadas de todas as recomendações e itens de ação gerados. Valide a arquitetura, o licenciamento e o custo antes da implantação.')}</p>
     {self._render_azure_resource_recommendations()}
 </div>
 
 <!-- Action Items -->
 <div class="section">
     <div class="section-title-row">
-        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">🎯 {bi('Action Items', 'Elementos de Acci\u00f3n')} (<span id="actionItemsCount">{total_actions}</span>)</div>
+        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">🎯 {bi('Action Items', 'Elementos de Acci\u00f3n', 'Itens de Ação')} (<span id="actionItemsCount">{total_actions}</span>)</div>
         <div class="action-toolbar">
-            <button id="addActionBtn" class="btn-add-action" type="button">+ {bi('Add action item', 'Agregar elemento')}</button>
+            <button id="addActionBtn" class="btn-add-action" type="button">+ {bi('Add action item', 'Agregar elemento', 'Adicionar item')}</button>
             <button id="toggleDismissedBtn" class="btn-link" type="button"
-                    data-show-en="Show dismissed" data-show-es="Mostrar descartados"
-                    data-hide-en="Hide dismissed" data-hide-es="Ocultar descartados">
-                <span class="i18n-en toggle-label">Show dismissed</span><span class="i18n-es toggle-label">Mostrar descartados</span> (<span class="dismissed-count">0</span>)
+                    data-show-en="Show dismissed" data-show-es="Mostrar descartados" data-show-pt="Mostrar descartados"
+                    data-hide-en="Hide dismissed" data-hide-es="Ocultar descartados" data-hide-pt="Ocultar descartados">
+                <span class="i18n-en toggle-label">Show dismissed</span><span class="i18n-es toggle-label">Mostrar descartados</span><span class="i18n-pt toggle-label">Mostrar descartados</span> (<span class="dismissed-count">0</span>)
             </button>
         </div>
     </div>
     <div id="severityFilterBar" class="severity-filter-bar">
-        <span class="severity-filter-label">{bi('Filter by severity:', 'Filtrar por severidad:')}</span>
-        <button type="button" class="severity-chip is-active" data-severity="all">{bi('All', 'Todos')}</button>
-        <button type="button" class="severity-chip" data-severity="critical" style="--chip-color: var(--cp-danger);">{bi('Critical', 'Cr\u00edtico')}</button>
-        <button type="button" class="severity-chip" data-severity="high" style="--chip-color: var(--cp-danger);">{bi('High', 'Alto')}</button>
-        <button type="button" class="severity-chip" data-severity="medium" style="--chip-color: var(--cp-warning);">{bi('Medium', 'Medio')}</button>
-        <button type="button" class="severity-chip" data-severity="low" style="--chip-color: var(--cp-link);">{bi('Low', 'Bajo')}</button>
-        <button type="button" class="severity-chip" data-severity="info" style="--chip-color: var(--cp-success);">{bi('Info', 'Info')}</button>
+        <span class="severity-filter-label">{bi('Filter by severity:', 'Filtrar por severidad:', 'Filtrar por severidade:')}</span>
+        <button type="button" class="severity-chip is-active" data-severity="all">{bi('All', 'Todos', 'Todos')}</button>
+        <button type="button" class="severity-chip" data-severity="critical" style="--chip-color: var(--cp-danger);">{bi('Critical', 'Cr\u00edtico', 'Crítico')}</button>
+        <button type="button" class="severity-chip" data-severity="high" style="--chip-color: var(--cp-danger);">{bi('High', 'Alto', 'Alto')}</button>
+        <button type="button" class="severity-chip" data-severity="medium" style="--chip-color: var(--cp-warning);">{bi('Medium', 'Medio', 'Médio')}</button>
+        <button type="button" class="severity-chip" data-severity="low" style="--chip-color: var(--cp-link);">{bi('Low', 'Bajo', 'Baixo')}</button>
+        <button type="button" class="severity-chip" data-severity="info" style="--chip-color: var(--cp-success);">{bi('Info', 'Info', 'Info')}</button>
     </div>
     <div id="addActionForm" class="action-form">
         <div class="action-form-field full">
-            <label>{bi('Title', 'T\u00edtulo')}</label>
+            <label>{bi('Title', 'T\u00edtulo', 'Título')}</label>
             <input type="text" id="newActionTitle" placeholder="e.g. Rotate storage account access keys">
         </div>
         <div class="action-form-field full">
-            <label>{bi('Description', 'Descripci\u00f3n')}</label>
+            <label>{bi('Description', 'Descripci\u00f3n', 'Descrição')}</label>
             <textarea id="newActionDesc" rows="2"></textarea>
         </div>
         <div class="action-form-field">
-            <label>{bi('Pillar', 'Pilar')}</label>
+            <label>{bi('Pillar', 'Pilar', 'Pilar')}</label>
             <select id="newActionPillar">
                 <option value="Reliability">Reliability</option>
                 <option value="Security">Security</option>
@@ -3904,7 +4235,7 @@ body.lang-es .i18n-es {{ display: inline; }}
             </select>
         </div>
         <div class="action-form-field">
-            <label>{bi('Severity', 'Severidad')}</label>
+            <label>{bi('Severity', 'Severidad', 'Severidade')}</label>
             <select id="newActionSeverity">
                 <option value="critical">Critical</option>
                 <option value="high">High</option>
@@ -3914,12 +4245,12 @@ body.lang-es .i18n-es {{ display: inline; }}
             </select>
         </div>
         <div class="action-form-field full">
-            <label>{bi('Resources (comma-separated)', 'Recursos (separados por coma)')}</label>
+            <label>{bi('Resources (comma-separated)', 'Recursos (separados por coma)', 'Recursos (separados por vírgula)')}</label>
             <input type="text" id="newActionResources" placeholder="vm-prod-01, storageacct123">
         </div>
         <div class="action-form-actions">
-            <button type="button" id="cancelActionBtn" class="action-form-cancel">{bi('Cancel', 'Cancelar')}</button>
-            <button type="button" id="saveActionBtn" class="action-form-save">{bi('Save', 'Guardar')}</button>
+            <button type="button" id="cancelActionBtn" class="action-form-cancel">{bi('Cancel', 'Cancelar', 'Cancelar')}</button>
+            <button type="button" id="saveActionBtn" class="action-form-save">{bi('Save', 'Guardar', 'Salvar')}</button>
         </div>
     </div>
     <div id="actionsListAll" class="action-list" data-pillar="all">
@@ -3930,16 +4261,16 @@ body.lang-es .i18n-es {{ display: inline; }}
 <!-- Data Summary Tables -->
 <div class="data-grid">
     <div class="table-card">
-        <h3>📦 {bi("Top Resource Types", "Principales Tipos de Recursos")}</h3>
+        <h3>📦 {bi("Top Resource Types", "Principales Tipos de Recursos", "Principais Tipos de Recursos")}</h3>
         <table>
-            <thead><tr><th>{bi("Resource Type", "Tipo de Recurso")}</th><th>{bi("Location", "Ubicaci\u00f3n")}</th><th>{bi("Count", "Cantidad")}</th></tr></thead>
+            <thead><tr><th>{bi("Resource Type", "Tipo de Recurso", "Tipo de Recurso")}</th><th>{bi("Location", "Ubicaci\u00f3n", "Localização")}</th><th>{bi("Count", "Cantidad", "Quantidade")}</th></tr></thead>
             <tbody>{resource_rows}</tbody>
         </table>
     </div>
     <div class="table-card">
-        <h3>💡 {bi("Advisor Summary", "Resumen de Advisor")}</h3>
+        <h3>💡 {bi("Advisor Summary", "Resumen de Advisor", "Resumo do Advisor")}</h3>
         <table>
-            <thead><tr><th>{bi("Category", "Categor\u00eda")}</th><th>{bi("Impact", "Impacto")}</th><th>{bi("Count", "Cantidad")}</th></tr></thead>
+            <thead><tr><th>{bi("Category", "Categor\u00eda", "Categoria")}</th><th>{bi("Impact", "Impacto", "Impacto")}</th><th>{bi("Count", "Cantidad", "Quantidade")}</th></tr></thead>
             <tbody>{advisor_rows}</tbody>
         </table>
     </div>
@@ -3972,8 +4303,8 @@ body.lang-es .i18n-es {{ display: inline; }}
 
 <!-- Footer -->
 <div class="footer">
-    {bi("Azure WAF/CAF Workshop Discovery Report | Generated by Azure Governance Discovery Toolkit", "Informe de Descubrimiento del Taller Azure WAF/CAF | Generado por Azure Governance Discovery Toolkit")}<br>
-    {bi("This report consolidates findings from Resource Discovery, Azure Advisor, Metrics Analysis, and Governance Visualization.", "Este informe consolida los hallazgos de Resource Discovery, Azure Advisor, An\u00e1lisis de M\u00e9tricas y Visualizaci\u00f3n de Gobernanza.")}
+    {bi("Azure WAF/CAF Workshop Discovery Report | Generated by Azure Governance Discovery Toolkit", "Informe de Descubrimiento del Taller Azure WAF/CAF | Generado por Azure Governance Discovery Toolkit", "Relatório de Descoberta do Workshop Azure WAF/CAF | Gerado pelo Azure Governance Discovery Toolkit")}<br>
+    {bi("This report consolidates findings from Resource Discovery, Azure Advisor, Metrics Analysis, and Governance Visualization.", "Este informe consolida los hallazgos de Resource Discovery, Azure Advisor, An\u00e1lisis de M\u00e9tricas y Visualizaci\u00f3n de Gobernanza.", "Este relatório consolida os achados do Resource Discovery, Azure Advisor, Análise de Métricas e Visualização de Governança.")}
 </div>
 
 </div>
@@ -3983,9 +4314,10 @@ function updateThemeButton() {{
     if (!btn) return;
     var dark = document.documentElement.getAttribute('data-theme') === 'dark';
     var spanish = document.body.classList.contains('lang-es');
+    var portuguese = document.body.classList.contains('lang-pt');
     var label = dark
-        ? (spanish ? 'Cambiar a modo claro' : 'Switch to light mode')
-        : (spanish ? 'Cambiar a modo nocturno' : 'Switch to night mode');
+        ? (spanish ? 'Cambiar a modo claro' : portuguese ? 'Mudar para modo claro' : 'Switch to light mode')
+        : (spanish ? 'Cambiar a modo nocturno' : portuguese ? 'Mudar para modo noturno' : 'Switch to night mode');
     btn.textContent = dark ? '☀' : '☾';
     btn.setAttribute('aria-label', label);
     btn.setAttribute('title', label);
@@ -4002,17 +4334,23 @@ function setTheme(theme, persist) {{
 function toggleTheme() {{
     setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 }}
+var LANG_CYCLE = ['en', 'es', 'pt'];
+var LANG_NEXT_LABEL = {{ en: 'ES 🇪🇸', es: 'PT 🇧🇷', pt: 'EN 🇬🇧' }};
 function setLang(lang) {{
+    if (LANG_CYCLE.indexOf(lang) === -1) {{ lang = 'en'; }}
     document.body.classList.toggle('lang-es', lang === 'es');
+    document.body.classList.toggle('lang-pt', lang === 'pt');
     document.documentElement.lang = lang;
     var btn = document.getElementById('langToggleBtn');
-    if (btn) {{ btn.textContent = lang === 'es' ? 'EN 🇬🇧' : 'ES 🇪🇸'; }}
+    if (btn) {{ btn.textContent = LANG_NEXT_LABEL[lang]; }}
     updateThemeButton();
     try {{ localStorage.setItem('wafDashboardLang', lang); }} catch (e) {{}}
     moveTabThumb(currentDashboardView, true);
 }}
 function toggleLang() {{
-    setLang(document.body.classList.contains('lang-es') ? 'en' : 'es');
+    var current = document.body.classList.contains('lang-es') ? 'es' : (document.body.classList.contains('lang-pt') ? 'pt' : 'en');
+    var next = LANG_CYCLE[(LANG_CYCLE.indexOf(current) + 1) % LANG_CYCLE.length];
+    setLang(next);
 }}
 function toggleTableRows(btn) {{
     var wrap = btn.previousElementSibling;
@@ -4031,6 +4369,8 @@ function moveTabThumb(view, skipAnimation) {{
     if (skipAnimation) {{ thumb.style.transition = 'none'; }}
     var barRect = bar.getBoundingClientRect();
     var tabRect = tab.getBoundingClientRect();
+    thumb.style.top = (tabRect.top - barRect.top) + 'px';
+    thumb.style.height = tabRect.height + 'px';
     thumb.style.width = tabRect.width + 'px';
     thumb.style.transform = 'translateX(' + (tabRect.left - barRect.left) + 'px)';
     if (skipAnimation) {{
@@ -4092,22 +4432,13 @@ function recalcAllDiagramBoxes() {{
     var svgs = document.querySelectorAll('.mg-diagram-svg');
     for (var i = 0; i < svgs.length; i++) {{ recalcDiagramBox(svgs[i]); }}
 }}
-function toggleDiagramNode(evt, ownerId) {{
-    evt.stopPropagation();
-    var group = document.querySelector('g.diagram-subtree[data-owner="' + ownerId + '"]');
-    if (!group) return;
-    var btn = evt.currentTarget;
-    var willExpand = group.style.display === 'none';
-    group.style.display = willExpand ? '' : 'none';
-    btn.setAttribute('aria-expanded', String(willExpand));
-    recalcDiagramBox(group.closest('svg'));
-}}
 
 /* ---- Action items: dismiss (persisted) + manually-added custom items (client-side only, localStorage) ---- */
 var ACTION_DISMISSED_KEY = 'wafDismissedActions';
 var ACTION_CUSTOM_KEY = 'wafCustomActions';
 var SEVERITY_COLORS_JS = {{"critical": "var(--cp-danger)", "high": "var(--cp-danger)", "medium": "var(--cp-warning)", "low": "var(--cp-link)", "info": "var(--cp-success)"}};
 var PILLAR_NAMES_ES = {{"Reliability": "Confiabilidad", "Security": "Seguridad", "Cost Optimization": "Optimizaci\u00f3n de Costos", "Operational Excellence": "Excelencia Operativa", "Performance Efficiency": "Eficiencia de Rendimiento", "Governance": "Gobernanza"}};
+var PILLAR_NAMES_PT = {{"Reliability": "Confiabilidade", "Security": "Seguran\u00e7a", "Cost Optimization": "Otimiza\u00e7\u00e3o de Custos", "Operational Excellence": "Excel\u00eancia Operacional", "Performance Efficiency": "Efici\u00eancia de Desempenho", "Governance": "Governan\u00e7a"}};
 var showDismissedActions = false;
 
 function loadJsonList(key) {{
@@ -4207,8 +4538,9 @@ document.addEventListener('change', function(e) {{
 function buildActionCardHtml(item, showPillar) {{
     var color = SEVERITY_COLORS_JS[item.severity] || 'var(--cp-text-muted)';
     var pillarEs = PILLAR_NAMES_ES[item.pillar] || item.pillar;
+    var pillarPt = PILLAR_NAMES_PT[item.pillar] || item.pillar;
     var pillarHtml = showPillar
-        ? ('<span class="pillar-tag"><span class="i18n-en">' + item.pillar + '</span><span class="i18n-es">' + pillarEs + '</span></span>')
+        ? ('<span class="pillar-tag"><span class="i18n-en">' + item.pillar + '</span><span class="i18n-es">' + pillarEs + '</span><span class="i18n-pt">' + pillarPt + '</span></span>')
         : '';
     var resourcesHtml = '';
     if (item.resources && item.resources.length) {{
@@ -4289,8 +4621,10 @@ function refreshDismissedToggleLabel() {{
     if (!toggleDismissedBtn) return;
     var enSpan = toggleDismissedBtn.querySelector('.i18n-en.toggle-label');
     var esSpan = toggleDismissedBtn.querySelector('.i18n-es.toggle-label');
+    var ptSpan = toggleDismissedBtn.querySelector('.i18n-pt.toggle-label');
     if (enSpan) enSpan.textContent = toggleDismissedBtn.getAttribute(showDismissedActions ? 'data-hide-en' : 'data-show-en');
     if (esSpan) esSpan.textContent = toggleDismissedBtn.getAttribute(showDismissedActions ? 'data-hide-es' : 'data-show-es');
+    if (ptSpan) ptSpan.textContent = toggleDismissedBtn.getAttribute(showDismissedActions ? 'data-hide-pt' : 'data-show-pt');
 }}
 if (toggleDismissedBtn) {{
     toggleDismissedBtn.addEventListener('click', function() {{
