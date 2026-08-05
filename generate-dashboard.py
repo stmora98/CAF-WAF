@@ -1679,36 +1679,156 @@ class DashboardGenerator:
             sub_id = str(row.get("subscriptionId", "") or "")
             return bool(sub_id) and sub_id in descendant_sub_ids(mg)
 
-        def build_tree(mg, depth_guard=0):
+        subs_rows_by_mgname: dict = {}
+        for s in subs_rows:
+            subs_rows_by_mgname.setdefault(str(s.get("mgParent", "")), []).append(s)
+
+        MG_NODE_W, MG_NODE_H = 200, 68
+        SUB_NODE_W, SUB_NODE_H = 170, 60
+        DIAGRAM_H_GAP, DIAGRAM_V_GAP = 28, 46
+        DIAGRAM_LEVEL_HEIGHT = max(MG_NODE_H, SUB_NODE_H) + DIAGRAM_V_GAP
+
+        def diagram_children(mg, depth_guard=0):
             if depth_guard > 12:
-                return ""
-            mg_id = str(mg.get("Id", ""))
+                return []
             level = mg_level(mg)
             level = level if level is not None else 0
             path = str(mg.get("Path", "") or "")
-            policy_count = len([p for p in policy_assignments if scope_matches(p, mg)])
-            role_count = len([r for r in role_assignments if scope_matches(r, mg)])
-            sub_count = int(mg.get("Subscriptions", 0) or 0)
-            children = [m for m in mg_rows if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")]
-            children_html = "".join(build_tree(child, depth_guard + 1) for child in children)
-            sub_html = ""
-            if sub_count:
-                sub_names = escape(str(mg.get("SubNames", "") or ""))
-                sub_html = f'<li class="mg-sub-leaf" title="{sub_names}">{self._azure_icon("subscriptions")} {sub_count} {bi("subscriptions", "suscripciones")}</li>'
-            return f"""<li>
-                <details open class="mg-node-details">
-                    <summary class="mg-node">
-                        <span class="mg-name">{self._azure_icon("management-groups")} {escape(str(mg.get('DisplayName', mg_id)))}</span>
-                        <span class="mg-badge mg-badge-policy" title="{policy_count} policy assignments">{self._azure_icon("policy")} {policy_count}</span>
-                        <span class="mg-badge mg-badge-rbac" title="{role_count} role assignments">{role_count}</span>
-                    </summary>
-                    <ul>{children_html}{sub_html}</ul>
-                </details>
-            </li>"""
+            child_mgs = [
+                {"kind": "mg", "data": m, "children": diagram_children(m, depth_guard + 1)}
+                for m in mg_rows
+                if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")
+            ]
+            child_subs = [
+                {"kind": "sub", "data": s, "children": []}
+                for s in subs_rows_by_mgname.get(str(mg.get("DisplayName", "")), [])
+            ]
+            return child_mgs + child_subs
+
+        def node_width(node):
+            return SUB_NODE_W if node["kind"] == "sub" else MG_NODE_W
+
+        def node_height(node):
+            return SUB_NODE_H if node["kind"] == "sub" else MG_NODE_H
+
+        def layout_subtree_width(node):
+            w = node_width(node)
+            children = node["children"]
+            if not children:
+                node["_w"] = w
+                return w
+            total = sum(layout_subtree_width(c) for c in children) + DIAGRAM_H_GAP * (len(children) - 1)
+            node["_w"] = max(w, total)
+            return node["_w"]
+
+        def assign_x(node, left):
+            children = node["children"]
+            if not children:
+                node["_x"] = left + node["_w"] / 2
+                return
+            children_total = sum(c["_w"] for c in children) + DIAGRAM_H_GAP * (len(children) - 1)
+            cursor = left + (node["_w"] - children_total) / 2
+            for c in children:
+                assign_x(c, cursor)
+                cursor += c["_w"] + DIAGRAM_H_GAP
+            node["_x"] = left + node["_w"] / 2
+
+        def build_diagram(roots):
+            tree_roots = [{"kind": "mg", "data": r, "children": diagram_children(r)} for r in roots]
+            if not tree_roots:
+                return ""
+
+            cursor = 0
+            for i, root in enumerate(tree_roots):
+                if i:
+                    cursor += DIAGRAM_H_GAP * 2
+                layout_subtree_width(root)
+                assign_x(root, cursor)
+                cursor += root["_w"]
+            total_w = cursor
+
+            max_depth = 0
+            flat = []
+
+            def collect(node, depth):
+                nonlocal max_depth
+                max_depth = max(max_depth, depth)
+                flat.append((node, depth))
+                for c in node["children"]:
+                    collect(c, depth + 1)
+
+            for root in tree_roots:
+                collect(root, 0)
+
+            def center_y(depth):
+                return 24 + depth * DIAGRAM_LEVEL_HEIGHT + max(MG_NODE_H, SUB_NODE_H) / 2
+
+            diagram_w = max(total_w, MG_NODE_W) + 40
+            diagram_h = 24 + (max_depth + 1) * DIAGRAM_LEVEL_HEIGHT + 20
+
+            links_svg = []
+            nodes_html = []
+            for node, depth in flat:
+                w = node_width(node)
+                h = node_height(node)
+                x = node["_x"]
+                y = center_y(depth)
+                y_bottom = y + h / 2
+                for child in node["children"]:
+                    cy_top = center_y(depth + 1) - node_height(child) / 2
+                    mid_y = (y_bottom + cy_top) / 2
+                    links_svg.append(
+                        f'<path d="M {x:.1f},{y_bottom:.1f} C {x:.1f},{mid_y:.1f} '
+                        f'{child["_x"]:.1f},{mid_y:.1f} {child["_x"]:.1f},{cy_top:.1f}" class="mg-diagram-link" fill="none" />'
+                    )
+
+                if node["kind"] == "sub":
+                    sub = node["data"]
+                    sub_id = str(sub.get("subscriptionId", ""))
+                    p_count = len([p for p in policy_assignments if str(p.get("subscriptionId", "")) == sub_id])
+                    r_count = len([r for r in role_assignments if str(r.get("subscriptionId", "")) == sub_id])
+                    name = str(sub.get("name", sub_id) or sub_id)
+                    icon = self._azure_icon("subscriptions")
+                    onclick_attr = ""
+                    box_class = "mg-diagram-node mg-diagram-node-sub"
+                else:
+                    mg = node["data"]
+                    mg_id = str(mg.get("Id", ""))
+                    p_count = len([p for p in policy_assignments if scope_matches(p, mg)])
+                    r_count = len([r for r in role_assignments if scope_matches(r, mg)])
+                    name = str(mg.get("DisplayName", mg_id) or mg_id)
+                    icon = self._azure_icon("management-groups")
+                    onclick_js = (
+                        "var el=document.getElementById('mg-scope-" + escape(mg_id) + "'); "
+                        "if(el){el.open=true; el.scrollIntoView({behavior:'smooth', block:'center'});}"
+                    )
+                    onclick_attr = f' onclick="{onclick_js}" style="cursor:pointer;"'
+                    box_class = "mg-diagram-node mg-diagram-node-mg"
+
+                label = name
+                avail_px = w - 16 - 6 - 20
+                max_chars = max(6, int(avail_px / 6.6))
+                if len(label) > max_chars:
+                    label = label[: max_chars - 1] + "\u2026"
+                nodes_html.append(
+                    f'<foreignObject x="{x - w / 2:.1f}" y="{y - h / 2:.1f}" width="{w}" height="{h}">'
+                    f'<div xmlns="http://www.w3.org/1999/xhtml" class="{box_class}" title="{escape(name)}"{onclick_attr}>'
+                    f'<div class="mg-diagram-name">{icon}<span>{escape(label)}</span></div>'
+                    '<div class="mg-diagram-badges">'
+                    f'<span class="mg-badge mg-badge-policy" title="{p_count} policy assignments">{p_count}</span>'
+                    f'<span class="mg-badge mg-badge-rbac" title="{r_count} role assignments">{r_count}</span>'
+                    '</div></div></foreignObject>'
+                )
+
+            svg = (
+                f'<svg class="mg-diagram-svg" viewBox="0 0 {diagram_w:.0f} {diagram_h:.0f}" '
+                f'width="{diagram_w:.0f}" height="{diagram_h:.0f}">' + "".join(links_svg) + "".join(nodes_html) + "</svg>"
+            )
+            return f'<div class="mg-diagram-wrap">{svg}</div>'
 
         if has_hierarchy:
             roots = [m for m in mg_rows if mg_level(m) == 0]
-            hierarchy_html = f'<ul class="mg-tree">{"".join(build_tree(r) for r in roots)}</ul>' if roots else ""
+            hierarchy_html = build_diagram(roots)
         else:
             hierarchy_html = ""
         if not hierarchy_html:
@@ -1734,7 +1854,7 @@ class DashboardGenerator:
                     policy_table = f"""<table class="mini-table"><thead><tr><th>{bi('Policy', 'Pol\u00edtica')}</th><th>{bi('Enforcement', 'Aplicaci\u00f3n')}</th><th>{bi('Identity', 'Identidad')}</th></tr></thead><tbody>{policy_rows}</tbody></table>"""
                 else:
                     policy_table = f'<p class="empty-state">{bi("No policy assignments at this scope.", "Sin asignaciones de pol\u00edticas en este alcance.")}</p>'
-                scope_items.append(f"""<details class="scope-detail">
+                scope_items.append(f"""<details class="scope-detail" id="mg-scope-{escape(mg_id)}">
                     <summary>{indent} <strong>{escape(str(mg.get('DisplayName', mg_id)))}</strong> <span class="scope-id">({escape(mg_id)})</span>
                         <span class="mg-badge mg-badge-policy">{len(mg_policies)} {bi('policies', 'pol.')}</span>
                         <span class="mg-badge mg-badge-rbac">{len(mg_roles)} {bi('roles', 'roles')}</span>
@@ -3309,6 +3429,23 @@ body {{
 .mg-badge-rbac {{ background: rgba(255, 149, 0, 0.14); color: var(--cp-warning); }}
 .mg-badge-subs {{ background: rgba(48, 209, 88, 0.12); color: var(--cp-success); }}
 .mg-sub-leaf {{ font-size: 14px; color: var(--cp-text-muted); padding: 6px 0; list-style: none; display: flex; align-items: center; gap: 8px; }}
+.mg-diagram-wrap {{ overflow-x: auto; padding: 8px 0 18px; }}
+.mg-diagram-svg {{ display: block; }}
+.mg-diagram-link {{ stroke: var(--cp-border); stroke-width: 2; }}
+.mg-diagram-node {{
+    box-sizing: border-box; width: 100%; height: 100%; background: var(--cp-surface); border: 1px solid var(--cp-border);
+    border-top-width: 3px; border-radius: var(--cp-radius-md); box-shadow: var(--cp-shadow); overflow: hidden;
+    display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; padding: 8px 10px;
+    font-family: inherit;
+}}
+.mg-diagram-node-mg {{ border-top-color: var(--cp-link); }}
+.mg-diagram-node-sub {{ border-top-color: var(--cp-success); }}
+.mg-diagram-name {{
+    display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; width: 100%; flex: 0 0 auto;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}}
+.mg-diagram-name .az-icon {{ width: 16px; height: 16px; flex-shrink: 0; }}
+.mg-diagram-badges {{ display: flex; gap: 6px; flex: 0 0 auto; }}
 .scope-insights {{ display: flex; flex-direction: column; gap: 6px; }}
 .scope-detail {{
     background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); padding: 10px 14px;
