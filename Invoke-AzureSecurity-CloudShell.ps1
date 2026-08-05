@@ -458,6 +458,114 @@ function Invoke-DefenderEndpointCollection {
     }
 }
 
+function Connect-WorkshopGraphIdentity {
+    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+        Write-Host '  Installing Microsoft.Graph.Authentication...' -ForegroundColor DarkYellow
+        Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck
+    }
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+
+    $requiredScopes = @('Application.Read.All', 'User.Read.All')
+    $graphContext = Get-MgContext
+    $missingScopes = @($requiredScopes | Where-Object { -not $graphContext -or $_ -notin $graphContext.Scopes })
+    if (-not $graphContext -or $missingScopes.Count -gt 0) {
+        $azContext = Get-AzContext
+        $connectParameters = @{ Scopes = $requiredScopes; NoWelcome = $true }
+        if ($azContext.Tenant.Id) { $connectParameters.TenantId = $azContext.Tenant.Id }
+        Connect-MgGraph @connectParameters | Out-Null
+    }
+}
+
+function Invoke-IdentityRiskCollection {
+    try {
+        Connect-WorkshopGraphIdentity
+    } catch {
+        $failureStatus = Get-SourceFailureStatus -ErrorRecord $_
+        foreach ($sourceName in @('Microsoft Entra app credential expiry', 'Microsoft Entra guest users')) {
+            Add-SourceStatus -Source $sourceName -Status $failureStatus -Records 0 `
+                -Details $_.Exception.Message `
+                -RequiredAccess 'Delegated Application.Read.All or User.Read.All plus a supported Entra directory role.'
+        }
+        Write-SecuritySheet -WorksheetName 'AppCredentialExpiry' -Rows @() -EmptyMessage 'Microsoft Graph authentication was unavailable.'
+        Write-SecuritySheet -WorksheetName 'GuestUsers' -Rows @() -EmptyMessage 'Microsoft Graph authentication was unavailable.'
+        Write-Warning "Microsoft Graph identity authentication failed: $($_.Exception.Message)"
+        return
+    }
+
+    $now = (Get-Date).ToUniversalTime()
+    $appUri = "https://graph.microsoft.com/v1.0/applications?`$select=id,appId,displayName,passwordCredentials,keyCredentials&`$top=999"
+    try {
+        $rawApps = @(Invoke-GraphPagedRequest -Uri $appUri)
+        $credentialRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($app in $rawApps) {
+            foreach ($cred in @($app.passwordCredentials)) {
+                if (-not $cred.endDateTime) { continue }
+                $endDate = [datetime]$cred.endDateTime
+                $daysLeft = [math]::Round(($endDate - $now).TotalDays)
+                if ($daysLeft -gt 90) { continue }
+                $credentialRows.Add([PSCustomObject]@{
+                    AppDisplayName  = $app.displayName
+                    AppId           = $app.appId
+                    CredentialType  = 'Secret'
+                    StartDateTime   = $cred.startDateTime
+                    EndDateTime     = $cred.endDateTime
+                    DaysUntilExpiry = $daysLeft
+                    Status          = if ($daysLeft -lt 0) { 'Expired' } else { 'ExpiringSoon' }
+                })
+            }
+            foreach ($cred in @($app.keyCredentials)) {
+                if (-not $cred.endDateTime) { continue }
+                $endDate = [datetime]$cred.endDateTime
+                $daysLeft = [math]::Round(($endDate - $now).TotalDays)
+                if ($daysLeft -gt 90) { continue }
+                $credentialRows.Add([PSCustomObject]@{
+                    AppDisplayName  = $app.displayName
+                    AppId           = $app.appId
+                    CredentialType  = 'Certificate'
+                    StartDateTime   = $cred.startDateTime
+                    EndDateTime     = $cred.endDateTime
+                    DaysUntilExpiry = $daysLeft
+                    Status          = if ($daysLeft -lt 0) { 'Expired' } else { 'ExpiringSoon' }
+                })
+            }
+        }
+        $credentials = @($credentialRows.ToArray() | Sort-Object DaysUntilExpiry)
+        Write-SecuritySheet -WorksheetName 'AppCredentialExpiry' -Rows $credentials
+        Add-SourceStatus -Source 'Microsoft Entra app credential expiry' -Status $(if ($credentials.Count) { 'Available' } else { 'NoData' }) `
+            -Records $credentials.Count -Details 'App registration secrets/certificates expiring within 90 days or already expired.' `
+            -RequiredAccess 'Application.Read.All and Cloud Application Administrator, Application Administrator, or Global Reader.'
+    } catch {
+        Add-SourceStatus -Source 'Microsoft Entra app credential expiry' -Status (Get-SourceFailureStatus $_) -Records 0 `
+            -Details $_.Exception.Message `
+            -RequiredAccess 'Application.Read.All and a supported Entra directory role.'
+        Write-SecuritySheet -WorksheetName 'AppCredentialExpiry' -Rows @() -EmptyMessage "App credential collection failed: $($_.Exception.Message)"
+        Write-Warning "App credential collection failed: $($_.Exception.Message)"
+    }
+
+    $guestUri = "https://graph.microsoft.com/v1.0/users?`$filter=userType eq 'Guest'&`$select=id,displayName,mail,createdDateTime,accountEnabled&`$top=999"
+    try {
+        $rawGuests = @(Invoke-GraphPagedRequest -Uri $guestUri)
+        $guests = @($rawGuests | ForEach-Object {
+            [PSCustomObject]@{
+                DisplayName     = $_.displayName
+                Mail            = $_.mail
+                CreatedDateTime = $_.createdDateTime
+                AccountEnabled  = $_.accountEnabled
+            }
+        })
+        Write-SecuritySheet -WorksheetName 'GuestUsers' -Rows $guests
+        Add-SourceStatus -Source 'Microsoft Entra guest users' -Status $(if ($guests.Count) { 'Available' } else { 'NoData' }) `
+            -Records $guests.Count -Details 'Guest (B2B) accounts in the tenant.' `
+            -RequiredAccess 'User.Read.All and Global Reader or Directory Reader.'
+    } catch {
+        Add-SourceStatus -Source 'Microsoft Entra guest users' -Status (Get-SourceFailureStatus $_) -Records 0 `
+            -Details $_.Exception.Message `
+            -RequiredAccess 'User.Read.All and a supported Entra directory role.'
+        Write-SecuritySheet -WorksheetName 'GuestUsers' -Rows @() -EmptyMessage "Guest user collection failed: $($_.Exception.Message)"
+        Write-Warning "Guest user collection failed: $($_.Exception.Message)"
+    }
+}
+
 Write-Host "`n=== Azure Security Assessment Export ===" -ForegroundColor Cyan
 Write-Host "Output: $outputFile" -ForegroundColor Cyan
 Write-Host "Lookback: $LookbackDays days" -ForegroundColor Cyan
@@ -474,6 +582,8 @@ if ($SkipDefenderPortal) {
     $skippedCollections = @(
         @('Microsoft Graph Security incidents', 'Incidents'),
         @('Microsoft Graph Security alerts', 'Alerts'),
+        @('Microsoft Entra app credential expiry', 'AppCredentialExpiry'),
+        @('Microsoft Entra guest users', 'GuestUsers'),
         @('Defender for Endpoint machines', 'Machines'),
         @('Defender for Endpoint recommendations', 'EndpointRecommendations'),
         @('Defender for Endpoint vulnerabilities', 'Vulnerabilities')
@@ -486,13 +596,16 @@ if ($SkipDefenderPortal) {
     if ($SkipGraphSecurity) {
         foreach ($collection in @(
             @('Microsoft Graph Security incidents', 'Incidents'),
-            @('Microsoft Graph Security alerts', 'Alerts')
+            @('Microsoft Graph Security alerts', 'Alerts'),
+            @('Microsoft Entra app credential expiry', 'AppCredentialExpiry'),
+            @('Microsoft Entra guest users', 'GuestUsers')
         )) {
             Add-SourceStatus -Source $collection[0] -Status 'Skipped' -Records 0 -Details 'Skipped by parameter.' -RequiredAccess ''
             Write-SecuritySheet -WorksheetName $collection[1] -Rows @() -EmptyMessage 'Microsoft Graph Security collection skipped by parameter.'
         }
     } else {
         Invoke-GraphSecurityCollection
+        Invoke-IdentityRiskCollection
     }
     Invoke-DefenderEndpointCollection
 }

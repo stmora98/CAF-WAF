@@ -177,6 +177,20 @@ policyresources
 | order by NonCompliantCount desc'
 Export-Sheet -Data $policyCompliance -Sheet "PolicyCompliance"
 
+# ─── Policy Exemptions ────────────────────────────────────────────────────────
+Write-Host "  [5b/12] Policy Exemptions..." -ForegroundColor Gray
+
+$policyExemptions = Invoke-ARGQuery -Query '
+policyresources
+| where type == "microsoft.authorization/policyexemptions"
+| extend displayName = tostring(properties.displayName),
+         exemptionCategory = tostring(properties.exemptionCategory),
+         policyAssignmentId = tostring(properties.policyAssignmentId),
+         expiresOn = tostring(properties.expiresOn)
+| project name, displayName, exemptionCategory, policyAssignmentId, expiresOn, subscriptionId, id
+| order by expiresOn asc'
+Export-Sheet -Data $policyExemptions -Sheet "PolicyExemptions"
+
 # ─── RBAC Role Assignments ───────────────────────────────────────────────────
 Write-Host "  [6/12] RBAC Role Assignments..." -ForegroundColor Gray
 

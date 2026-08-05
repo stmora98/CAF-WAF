@@ -1219,6 +1219,40 @@ class DashboardGenerator:
                 )
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
+        def disc_real_rows(sheet_name):
+            discovery = self.data.get("discovery", {})
+            return [
+                row for row in discovery.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        def render_compliance_bars(rows):
+            """Pass-rate bar per regulatory/framework compliance standard (RegulatoryStandards sheet)."""
+            totals = {}
+            for row in rows:
+                name = str(row.get("complianceStandard") or "Unknown")
+                passed = as_int(row.get("passedControls"))
+                failed = as_int(row.get("failedControls"))
+                skipped = as_int(row.get("skippedControls"))
+                unsupported = as_int(row.get("unsupportedControls"))
+                entry = totals.setdefault(name, {"passed": 0, "total": 0})
+                entry["passed"] += passed
+                entry["total"] += passed + failed + skipped + unsupported
+            if not totals:
+                return f'<p class="empty-state">{bi("No regulatory compliance standards found.", "No se encontraron est\u00e1ndares de cumplimiento normativo.")}</p>'
+            items = sorted(totals.items(), key=lambda kv: (kv[1]["passed"] / kv[1]["total"]) if kv[1]["total"] else 0)
+            rows_html = ""
+            for name, entry in items:
+                pct = (entry["passed"] / entry["total"] * 100) if entry["total"] else 0
+                color = "var(--cp-danger)" if pct < 60 else "var(--cp-warning)" if pct < 85 else "var(--cp-success)"
+                rows_html += f"""<div class="cost-bar-row">
+                    <span class="cost-bar-label">{escape(name)}</span>
+                    <div class="cost-bar-track"><div class="cost-bar-fill" style="width:{pct:.0f}%; background:{color};"></div></div>
+                    <span class="cost-bar-value">{entry['passed']}/{entry['total']}</span>
+                    <span class="cost-bar-pct">{pct:.0f}%</span>
+                </div>"""
+            return f'<div class="cost-bar-chart">{rows_html}</div>'
+
         severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
         recommendations = [
             row for row in real_rows("Recommendations")
@@ -1254,6 +1288,16 @@ class DashboardGenerator:
             if str(machine.get("RiskScore", "")).lower() in ("critical", "high")
         ])
 
+        regulatory_standards = real_rows("RegulatoryStandards")
+        keyvault_expirations = sorted(
+            [row for row in disc_real_rows("KeyVaultExpirations") if row.get("DaysUntilExpiry") not in (None, "")],
+            key=lambda row: as_int(row.get("DaysUntilExpiry")),
+        )
+        expired_kv_items = [row for row in keyvault_expirations if as_int(row.get("DaysUntilExpiry")) < 0]
+        app_credential_expiry = sorted(real_rows("AppCredentialExpiry"), key=lambda row: as_int(row.get("DaysUntilExpiry")))
+        expired_app_credentials = [row for row in app_credential_expiry if str(row.get("Status", "")).lower() == "expired"]
+        guest_users = real_rows("GuestUsers")
+
         secure_score = breakdown.get("secure_score_pct")
         secure_score_text = f"{secure_score:.1f}%" if secure_score is not None else "N/A"
         stats = [
@@ -1263,6 +1307,7 @@ class DashboardGenerator:
             (breakdown.get("active_incidents", 0), bi("Active XDR Incidents", "Incidentes XDR activos"), "security-danger"),
             (breakdown.get("active_alerts", 0), bi("Active Security Alerts", "Alertas de seguridad activas"), "security-warning"),
             (at_risk_machines, bi("High-risk Endpoints", "Endpoints de alto riesgo"), "security-danger"),
+            (len(expired_kv_items) + len(expired_app_credentials), bi("Expired Credentials", "Credenciales expiradas"), "security-danger" if (expired_kv_items or expired_app_credentials) else ""),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
@@ -1340,6 +1385,27 @@ class DashboardGenerator:
             ("ExposedMachines", "Exposed Machines", "Equipos expuestos", True),
             ("PublicExploit", "Public Exploit", "Exploit público", False),
         ], "No Defender for Endpoint vulnerabilities returned.", "No se devolvieron vulnerabilidades de Defender for Endpoint.")
+        compliance_bars = render_compliance_bars(regulatory_standards)
+        keyvault_expirations_table = render_table(keyvault_expirations, [
+            ("VaultName", "Key Vault", "Key Vault", False),
+            ("ItemType", "Type", "Tipo", False),
+            ("ItemName", "Item", "Elemento", False),
+            ("DaysUntilExpiry", "Days Until Expiry", "D\u00edas para Expirar", True),
+            ("ExpiresOn", "Expires On", "Expira el", False),
+        ], "No expiring Key Vault secrets or certificates found (or Key Vault Get permission unavailable).", "No se encontraron secretos o certificados de Key Vault por expirar (o falta el permiso Get de Key Vault).")
+        app_credential_table = render_table(app_credential_expiry, [
+            ("AppDisplayName", "Application", "Aplicaci\u00f3n", False),
+            ("CredentialType", "Type", "Tipo", False),
+            ("DaysUntilExpiry", "Days Until Expiry", "D\u00edas para Expirar", True),
+            ("EndDateTime", "Expires On", "Expira el", False),
+            ("Status", "Status", "Estado", False),
+        ], "No expiring app registration credentials found.", "No se encontraron credenciales de registros de aplicaciones por expirar.")
+        guest_users_table = render_table(guest_users, [
+            ("DisplayName", "Guest User", "Usuario invitado", False),
+            ("Mail", "Email", "Correo", False),
+            ("CreatedDateTime", "Created", "Creado", False),
+            ("AccountEnabled", "Enabled", "Habilitado", False),
+        ], "No guest (B2B) users found.", "No se encontraron usuarios invitados (B2B).")
 
         return f"""
         <div class="security-summary-band">
@@ -1355,6 +1421,10 @@ class DashboardGenerator:
         <div class="section">
             <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM')}</div>
             {recommendations_table}
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Regulatory and framework compliance', 'Cumplimiento normativo y de marcos')}</div>
+            {compliance_bars}
         </div>
         <div class="security-two-column">
             <div class="security-panel"><h3>{bi('Secure Score controls', 'Controles de Secure Score')}</h3>{controls_table}</div>
@@ -1376,6 +1446,17 @@ class DashboardGenerator:
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad')}</h3>{endpoint_recommendations_table}</div>
                 <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title security-title">{bi('Credential and identity hygiene', 'Higiene de credenciales e identidad')}</div>
+            <div class="security-two-column">
+                <div class="security-panel"><h3>{bi('Key Vault secret/certificate expiration', 'Expiraci\u00f3n de secretos/certificados de Key Vault')}</h3>{keyvault_expirations_table}</div>
+                <div class="security-panel"><h3>{bi('App registration credential expiration', 'Expiraci\u00f3n de credenciales de registros de aplicaciones')}</h3>{app_credential_table}</div>
+            </div>
+            <div class="security-panel">
+                <h3>{bi('Guest (B2B) users', 'Usuarios invitados (B2B)')}</h3>
+                {guest_users_table}
             </div>
         </div>
         <div class="section">
@@ -1544,6 +1625,7 @@ class DashboardGenerator:
         orphaned = real_rows("OrphanedResources")
         vnets = real_rows("VNets")
         locks = real_rows("Locks")
+        policy_exemptions = real_rows("PolicyExemptions")
 
         non_compliant_count = sum(int(r.get("NonCompliantCount", 0) or 0) for r in policy_compliance) or len(policy_compliance)
         stats = [
@@ -1554,14 +1636,12 @@ class DashboardGenerator:
             (len(role_assignments), bi("Role Assignments", "Asignaciones de Roles")),
             (len(locks), bi("Resource Locks", "Bloqueos de Recursos")),
             (len(orphaned), bi("Orphaned Resources", "Recursos Hu\u00e9rfanos")),
+            (len(policy_exemptions), bi("Policy Exemptions", "Exenciones de Pol\u00edtica")),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value security-accent">{count:,}</div><div class="label">{label}</div></div>'
             for count, label in stats
         )
-
-        def scope_matches(scope, mg_id):
-            return bool(mg_id) and f"/managementgroups/{mg_id}".lower() in str(scope or "").lower()
 
         def mg_level(m):
             try:
@@ -1571,6 +1651,34 @@ class DashboardGenerator:
 
         has_hierarchy = bool(mg_rows) and any(mg_level(m) is not None for m in mg_rows)
 
+        subs_by_mgname: dict = {}
+        for s in subs_rows:
+            subs_by_mgname.setdefault(str(s.get("mgParent", "")), []).append(str(s.get("subscriptionId", "")))
+
+        _descendant_sub_ids_cache: dict = {}
+
+        def descendant_sub_ids(mg):
+            mg_id = str(mg.get("Id", ""))
+            if mg_id in _descendant_sub_ids_cache:
+                return _descendant_sub_ids_cache[mg_id]
+            ids = set(subs_by_mgname.get(str(mg.get("DisplayName", "")), []))
+            level = mg_level(mg)
+            level = level if level is not None else 0
+            path = str(mg.get("Path", "") or "")
+            children = [m for m in mg_rows if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")]
+            for child in children:
+                ids |= descendant_sub_ids(child)
+            _descendant_sub_ids_cache[mg_id] = ids
+            return ids
+
+        def scope_matches(row, mg):
+            mg_id = str(mg.get("Id", ""))
+            scope = str(row.get("scope_", "") or "")
+            if mg_id and f"/managementgroups/{mg_id}".lower() in scope.lower():
+                return True
+            sub_id = str(row.get("subscriptionId", "") or "")
+            return bool(sub_id) and sub_id in descendant_sub_ids(mg)
+
         def build_tree(mg, depth_guard=0):
             if depth_guard > 12:
                 return ""
@@ -1578,8 +1686,8 @@ class DashboardGenerator:
             level = mg_level(mg)
             level = level if level is not None else 0
             path = str(mg.get("Path", "") or "")
-            policy_count = len([p for p in policy_assignments if scope_matches(p.get("scope_"), mg_id)])
-            role_count = len([r for r in role_assignments if scope_matches(r.get("scope_"), mg_id)])
+            policy_count = len([p for p in policy_assignments if scope_matches(p, mg)])
+            role_count = len([r for r in role_assignments if scope_matches(r, mg)])
             sub_count = int(mg.get("Subscriptions", 0) or 0)
             children = [m for m in mg_rows if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")]
             children_html = "".join(build_tree(child, depth_guard + 1) for child in children)
@@ -1615,8 +1723,8 @@ class DashboardGenerator:
             ordered_mgs = sorted(mg_rows, key=lambda m: (mg_level(m) or 0, str(m.get("DisplayName", ""))))
             for mg in ordered_mgs[:40]:
                 mg_id = str(mg.get("Id", ""))
-                mg_policies = [p for p in policy_assignments if scope_matches(p.get("scope_"), mg_id)]
-                mg_roles = [r for r in role_assignments if scope_matches(r.get("scope_"), mg_id)]
+                mg_policies = [p for p in policy_assignments if scope_matches(p, mg)]
+                mg_roles = [r for r in role_assignments if scope_matches(r, mg)]
                 indent = "\u2014" * (mg_level(mg) or 0)
                 if mg_policies:
                     policy_rows = "".join(
@@ -1693,6 +1801,12 @@ class DashboardGenerator:
             ("lockLevel", "Level", "Nivel", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No resource locks found.", "No se encontraron bloqueos de recursos.")
+        policy_exemptions_table = render_table(policy_exemptions, [
+            ("displayName", "Name", "Nombre", False),
+            ("exemptionCategory", "Category", "Categor\u00eda", False),
+            ("policyAssignmentId", "Policy Assignment", "Asignaci\u00f3n de Pol\u00edtica", False),
+            ("expiresOn", "Expires On", "Expira el", False),
+        ], "No policy exemptions found.", "No se encontraron exenciones de pol\u00edtica.")
 
         return f"""
         <div class="security-summary-band">
@@ -1715,6 +1829,10 @@ class DashboardGenerator:
         <div class="security-two-column">
             <div class="security-panel"><h3>{bi('Non-compliant resources', 'Recursos no conformes')}</h3>{policy_compliance_table}</div>
             <div class="security-panel"><h3>{bi('Resource locks', 'Bloqueos de recursos')}</h3>{locks_table}</div>
+        </div>
+        <div class="security-panel">
+            <h3>{bi('Policy exemptions', 'Exenciones de pol\u00edtica')}</h3>
+            {policy_exemptions_table}
         </div>
         <div class="security-two-column">
             <div class="security-panel"><h3>{bi('Role assignments', 'Asignaciones de roles')}</h3>{role_assignments_table}</div>
@@ -1825,7 +1943,7 @@ class DashboardGenerator:
             return value if isinstance(value, datetime) else datetime.min
 
         def render_cost_trend_chart(rows):
-            """FinOps Hub-style monthly cost trend: area chart + MoM delta badge."""
+            """FinOps Hub-style monthly cost trend: area chart + MoM delta badge + simple next-month forecast."""
             monthly = defaultdict(float)
             for r in rows:
                 monthly[r.get("BillingMonth")] += as_float(r.get("Cost"))
@@ -1834,10 +1952,19 @@ class DashboardGenerator:
                 return ""
             values = [monthly[m] for m in months]
             labels = [month_label(m) for m in months]
-            n, max_val = len(values), max(values) or 1
+            n = len(values)
+            forecast_value = None
+            if n >= 2:
+                window = values[max(0, n - 3):]
+                deltas = [window[i] - window[i - 1] for i in range(1, len(window))]
+                avg_delta = sum(deltas) / len(deltas) if deltas else 0
+                forecast_value = max(values[-1] + avg_delta, 0)
+            total_points = n + (1 if forecast_value is not None else 0)
+            max_val = max(values + ([forecast_value] if forecast_value is not None else [])) or 1
             width, height, pad_l, pad_r, pad_t, pad_b = 1000, 260, 24, 24, 40, 34
             plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
-            xs = [width / 2] if n == 1 else [pad_l + i * (plot_w / (n - 1)) for i in range(n)]
+            xs_all = [width / 2] if total_points == 1 else [pad_l + i * (plot_w / (total_points - 1)) for i in range(total_points)]
+            xs = xs_all[:n]
             ys = [pad_t + plot_h - (v / max_val * plot_h) for v in values]
             points = list(zip(xs, ys))
             line_d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in points)
@@ -1855,6 +1982,22 @@ class DashboardGenerator:
                 f'<text x="{x:.1f}" y="{height - 10}" text-anchor="middle" class="trend-month-label">{escape(lbl)}</text>'
                 for x, lbl in zip(xs, labels)
             )
+            forecast_svg = ""
+            forecast_badge = ""
+            if forecast_value is not None:
+                fx, fy = xs_all[n], pad_t + plot_h - (forecast_value / max_val * plot_h)
+                forecast_svg = (
+                    f'<path d="M {xs[-1]:.1f},{ys[-1]:.1f} L {fx:.1f},{fy:.1f}" fill="none" stroke="var(--cp-warning)" '
+                    f'stroke-width="2.5" stroke-dasharray="6,5" stroke-linecap="round" />'
+                    f'<circle cx="{fx:.1f}" cy="{fy:.1f}" r="4" fill="var(--cp-warning)" stroke="var(--cp-warning)" />'
+                    f'<text x="{fx:.1f}" y="{max(fy - 12, 14):.1f}" text-anchor="middle" class="trend-value-label" style="fill:var(--cp-warning);">${forecast_value:,.0f}</text>'
+                    f'<text x="{fx:.1f}" y="{height - 10}" text-anchor="middle" class="trend-month-label" style="fill:var(--cp-warning);">'
+                    f'<tspan class="i18n-en">Forecast</tspan><tspan class="i18n-es">Pron\u00f3stico</tspan></text>'
+                )
+                forecast_badge = (
+                    f'<span class="finops-trend-delta" style="color:var(--cp-warning);">'
+                    f'{bi("Next month forecast", "Pron\u00f3stico pr\u00f3ximo mes")}: ${forecast_value:,.0f}</span>'
+                )
             delta_html = ""
             if n >= 2 and values[-2]:
                 delta_pct = (values[-1] - values[-2]) / values[-2] * 100
@@ -1872,6 +2015,7 @@ class DashboardGenerator:
                         <span class="finops-trend-total-label">{bi("latest month", "\u00faltimo mes")}</span>
                     </div>
                     {delta_html}
+                    {forecast_badge}
                 </div>
                 <svg viewBox="0 0 {width} {height}" class="finops-trend-svg">
                     <defs>
@@ -1886,6 +2030,7 @@ class DashboardGenerator:
                     {dots}
                     {value_labels}
                     {month_labels}
+                    {forecast_svg}
                 </svg>
             </div>"""
 
@@ -1941,6 +2086,12 @@ class DashboardGenerator:
         orphaned = real_rows(governance, "OrphanedResources")
         dealloc_vms = real_rows(discovery, "DeallocatedVMs")
         unattached_disks = real_rows(discovery, "UnattachedDisks")
+        budgets = real_rows(finops, "Budgets")
+        for b in budgets:
+            amount = as_float(b.get("Amount"))
+            spend = as_float(b.get("CurrentSpend"))
+            b["_pct"] = (spend / amount * 100) if amount else 0
+        budgets_over = [b for b in budgets if b.get("_pct", 0) >= 100]
 
         vm_waste = [r for r in vm_rightsizing if waste_priority(r.get("Assessment")) <= 1]
         sql_waste = [r for r in sql_rightsizing if waste_priority(r.get("Assessment")) <= 1]
@@ -1969,6 +2120,8 @@ class DashboardGenerator:
             (orphaned_total, bi("Orphaned/Unused Resources", "Recursos Hu\u00e9rfanos/No Usados"), "security-danger"),
             (len(extended_recs), bi("Extended FinOps Checks", "Verificaciones FinOps Extendidas"), "security-warning"),
         ]
+        if budgets:
+            stats.append((len(budgets_over), bi("Budgets Over Threshold", "Presupuestos Excedidos"), "security-danger" if budgets_over else ""))
         if actual_cost_rows:
             stats.insert(1, (f"{total_actual_cost:,.0f} {actual_cost_currency}", bi("Actual Cost (6mo)", "Costo Real (6 meses)"), ""))
         stat_html = "".join(
@@ -2066,6 +2219,72 @@ class DashboardGenerator:
             actual_cost_rows, "Subscription",
             "No subscription cost data found.", "No se encontraron datos de costo por suscripci\u00f3n.",
         )
+        cost_by_region_bars = render_cost_breakdown_bars(
+            actual_cost_rows, "ResourceLocation",
+            "No region cost data found.", "No se encontraron datos de costo por regi\u00f3n.",
+        )
+
+        def render_budget_bars(rows):
+            if not rows:
+                return f'<p class="empty-state">{bi("No budgets configured (Microsoft.Consumption/budgets).", "No hay presupuestos configurados (Microsoft.Consumption/budgets).")}</p>'
+            rows_html = ""
+            for b in sorted(rows, key=lambda r: r.get("_pct", 0), reverse=True):
+                pct = min(b.get("_pct", 0), 100)
+                color = "var(--cp-danger)" if b.get("_pct", 0) >= 100 else "var(--cp-warning)" if b.get("_pct", 0) >= 75 else "var(--cp-success)"
+                currency = b.get("Currency", "") or ""
+                label = f"{b.get('BudgetName', 'Budget')} ({b.get('Subscription', '')})"
+                rows_html += f"""<div class="cost-bar-row">
+                    <span class="cost-bar-label">{_cell_html(label)}</span>
+                    <div class="cost-bar-track"><div class="cost-bar-fill" style="width:{pct:.0f}%; background:{color};"></div></div>
+                    <span class="cost-bar-value">{as_float(b.get('CurrentSpend')):,.0f} / {as_float(b.get('Amount')):,.0f} {currency}</span>
+                    <span class="cost-bar-pct">{b.get('_pct', 0):.0f}%</span>
+                </div>"""
+            return f'<div class="cost-bar-chart">{rows_html}</div>'
+
+        budget_bars_html = render_budget_bars(budgets)
+
+        def render_expensive_at_risk(rows):
+            """Cross-cut: highest-spend services that also have open action items in other pillars."""
+            service_totals = defaultdict(float)
+            for r in rows:
+                service_totals[str(r.get("ServiceName") or "Unknown")] += as_float(r.get("Cost"))
+            if not service_totals:
+                return f'<p class="empty-state">{bi("No cost data available to cross-reference.", "No hay datos de costo disponibles para cruzar.")}</p>'
+            top_services = sorted(service_totals.items(), key=lambda kv: kv[1], reverse=True)[:12]
+            other_actions = [a for a in self.engine.action_items if a.get("pillar") != "Cost Optimization"]
+            sev_weight = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+            cross_rows = []
+            for name, cost in top_services:
+                name_lc = name.lower()
+                if not name_lc or name_lc == "unknown":
+                    continue
+                matches = [
+                    a for a in other_actions
+                    if name_lc in str(a.get("title", "")).lower()
+                    or name_lc in str(a.get("description", "")).lower()
+                    or any(name_lc in str(res).lower() for res in (a.get("resources") or []))
+                ]
+                if not matches:
+                    continue
+                worst = max(matches, key=lambda a: sev_weight.get(str(a.get("severity", "")).lower(), 0))
+                cross_rows.append({
+                    "Service": name,
+                    "CostDisplay": f"${cost:,.0f}",
+                    "OpenFindings": len(matches),
+                    "TopSeverity": str(worst.get("severity", "")).upper(),
+                    "TopIssue": bi(worst.get("title", ""), worst.get("title_es", worst.get("title", ""))),
+                })
+            if not cross_rows:
+                return f'<p class="empty-state">{bi("No expensive services currently have open findings in other pillars.", "Ning\u00fan servicio costoso tiene actualmente hallazgos abiertos en otros pilares.")}</p>'
+            return render_table(cross_rows, [
+                ("Service", "Service", "Servicio", False),
+                ("CostDisplay", "6-mo Cost", "Costo 6 meses", True),
+                ("OpenFindings", "Open Findings", "Hallazgos Abiertos", True),
+                ("TopSeverity", "Top Severity", "Severidad M\u00e1xima", False),
+                ("TopIssue", "Top Issue", "Problema Principal", False),
+            ], "", "")
+
+        expensive_at_risk_table = render_expensive_at_risk(actual_cost_rows)
         extended_recs_table = render_table(extended_recs, [
             ("CheckType", "Check", "Verificaci\u00f3n", False),
             ("name", "Resource", "Recurso", False),
@@ -2091,6 +2310,18 @@ class DashboardGenerator:
                 <div class="security-panel"><h3>{bi('Cost by service', 'Costo por servicio')}</h3>{cost_by_service_bars}</div>
                 <div class="security-panel"><h3>{bi('Cost by subscription', 'Costo por suscripci\u00f3n')}</h3>{cost_by_subscription_bars}</div>
             </div>
+            <div class="security-panel">
+                <h3>{bi('Cost by region', 'Costo por regi\u00f3n')}</h3>
+                {cost_by_region_bars}
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Budgets vs. actual spend', 'Presupuestos vs. gasto real')}</div>
+            {budget_bars_html}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-danger);">{bi('Expensive services with open risk findings', 'Servicios costosos con hallazgos de riesgo abiertos')}</div>
+            {expensive_at_risk_table}
         </div>
 
         <div class="section">
@@ -2237,6 +2468,16 @@ class DashboardGenerator:
         backups = real_rows(discovery, "BackupVaults")
         vnets = real_rows(discovery, "VNets") or real_rows(governance, "VNets")
         vnets_no_ddos = [v for v in vnets if not ddos_enabled(v)]
+        protected_items = real_rows(discovery, "BackupProtectedItems")
+        failed_backups = [
+            p for p in protected_items
+            if str(p.get("lastBackupStatus", "")).lower() not in ("completed", "success", "succeeded", "")
+        ]
+        health_events = sorted(
+            real_rows(discovery, "ResourceHealthEvents"),
+            key=lambda e: str(e.get("status", "")).lower() != "active"
+        )
+        active_health_events = [e for e in health_events if str(e.get("status", "")).lower() == "active"]
         reliability_recs = sorted(
             real_rows(advisor, "Reliability"),
             key=lambda r: {"high": 0, "medium": 1, "low": 2}.get(str(r.get("impact", "")).lower(), 3)
@@ -2251,6 +2492,8 @@ class DashboardGenerator:
             (len(vnets_no_ddos), bi("VNets without DDoS Protection", "VNets sin Protecci\u00f3n DDoS"), "security-warning" if vnets_no_ddos else ""),
             (len(reliability_recs), bi("Advisor Reliability Recs", "Recom. de Confiabilidad"), ""),
             (len(high_impact), bi("High-Impact Recommendations", "Recomendaciones de Alto Impacto"), "security-danger" if high_impact else ""),
+            (len(failed_backups), bi("Backup Items Failing/Not Protected", "Elementos de Backup Fallidos/No Protegidos"), "security-danger" if failed_backups else ""),
+            (len(active_health_events), bi("Active Resource Health Events", "Eventos Activos de Resource Health"), "security-danger" if active_health_events else ""),
         ]
         stat_html = "".join(
             f'<div class="security-stat"><div class="value {color_class}">{value}</div><div class="label">{label}</div></div>'
@@ -2281,6 +2524,23 @@ class DashboardGenerator:
             ("solution", "Solution", "Soluci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor reliability recommendations found.", "No se encontraron recomendaciones de confiabilidad de Advisor.")
+        protected_items_table = render_table(protected_items, [
+            ("friendlyName", "Item", "Elemento", False),
+            ("protectedItemType", "Type", "Tipo", False),
+            ("workloadType", "Workload", "Carga de Trabajo", False),
+            ("protectionStatus", "Protection Status", "Estado de Protecci\u00f3n", False),
+            ("lastBackupStatus", "Last Backup Status", "\u00daltimo Estado de Backup", False),
+            ("lastBackupTime", "Last Backup Time", "\u00daltima Hora de Backup", False),
+            ("policyName", "Policy", "Pol\u00edtica", False),
+        ], "No backup-protected items found (vaults exist but nothing is protected, or Backup Reader access is missing).", "No se encontraron elementos protegidos por backup (existen vaults pero nada est\u00e1 protegido, o falta acceso de Backup Reader).")
+        health_events_table = render_table(health_events, [
+            ("title", "Event", "Evento", False),
+            ("eventType", "Type", "Tipo", False),
+            ("status", "Status", "Estado", False),
+            ("level", "Level", "Nivel", False),
+            ("impactStartTime", "Impact Start", "Inicio de Impacto", False),
+            ("impactMitigationTime", "Mitigated", "Mitigado", False),
+        ], "No Azure Resource Health / Service Health events found.", "No se encontraron eventos de Resource Health / Service Health de Azure.")
 
         return f"""
         <div class="security-summary-band">
@@ -2300,6 +2560,14 @@ class DashboardGenerator:
         <div class="security-two-column">
             <div class="security-panel"><h3>{bi('Backup vault coverage', 'Cobertura de vaults de backup')}</h3>{backups_table}</div>
             <div class="security-panel"><h3>{bi('VNets without DDoS Protection', 'VNets sin Protecci\u00f3n DDoS')}</h3>{vnets_table}</div>
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Real backup coverage (protected items)', 'Cobertura real de backup (elementos protegidos)')}</div>
+            {protected_items_table}
+        </div>
+        <div class="section">
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Resource / Service Health events', 'Eventos de Resource Health / Service Health')}</div>
+            {health_events_table}
         </div>
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor')}</div>

@@ -34,6 +34,7 @@ function Run-Query {
     if ($all.Count -eq 0) { $all = @([PSCustomObject]@{ Result = "No resources found" }) }
     $all | Export-Excel -Path $outputFile -WorksheetName $Sheet -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
     Write-Host "  [$Sheet] $($all.Count) rows" -ForegroundColor Gray
+    return $all
 }
 
 Write-Host "`n=== Azure WAF/CAF Discovery ===" -ForegroundColor Cyan
@@ -174,7 +175,7 @@ resources
 | project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, skuCapacity, tags
 | order by type asc, name asc'
 
-Run-Query -Sheet "KeyVaults" -Query '
+$keyVaultList = Run-Query -Sheet "KeyVaults" -Query '
 resources
 | where type == "microsoft.keyvault/vaults"
 | extend sku_=properties.sku.name,
@@ -184,6 +185,50 @@ resources
          networkAccess=properties.networkAcls.defaultAction
 | project name, resourceGroup, subscriptionId, location, sku_, softDelete, purgeProtection, rbac, networkAccess, tags
 | order by name asc'
+
+# ─── Key Vault secret/certificate expiration (data-plane, needs Key Vault Get permission per vault) ──
+Write-Host "Checking Key Vault secret/certificate expiration..." -ForegroundColor Green
+$kvExpirationRows = @()
+if ($keyVaultList -and -not ($keyVaultList.Count -eq 1 -and $keyVaultList[0].PSObject.Properties.Name -contains "Result")) {
+    if (-not (Get-Module -ListAvailable -Name Az.KeyVault)) {
+        Install-Module Az.KeyVault -Scope CurrentUser -Force
+    }
+    Import-Module Az.KeyVault
+    $now = Get-Date
+    foreach ($vault in $keyVaultList) {
+        try {
+            $secrets = Get-AzKeyVaultSecret -VaultName $vault.name -ErrorAction Stop
+            foreach ($s in $secrets) {
+                $days = if ($s.Expires) { [math]::Round(($s.Expires - $now).TotalDays) } else { $null }
+                $kvExpirationRows += [PSCustomObject]@{
+                    VaultName = $vault.name; ItemType = "Secret"; ItemName = $s.Name
+                    Enabled = $s.Enabled; ExpiresOn = $s.Expires; DaysUntilExpiry = $days
+                    ResourceGroup = $vault.resourceGroup; SubscriptionId = $vault.subscriptionId
+                }
+            }
+        } catch {
+            Write-Host "  ! Could not read secrets for vault $($vault.name): $($_.Exception.Message)" -ForegroundColor DarkYellow
+        }
+        try {
+            $certs = Get-AzKeyVaultCertificate -VaultName $vault.name -ErrorAction Stop
+            foreach ($c in $certs) {
+                $days = if ($c.Expires) { [math]::Round(($c.Expires - $now).TotalDays) } else { $null }
+                $kvExpirationRows += [PSCustomObject]@{
+                    VaultName = $vault.name; ItemType = "Certificate"; ItemName = $c.Name
+                    Enabled = $c.Enabled; ExpiresOn = $c.Expires; DaysUntilExpiry = $days
+                    ResourceGroup = $vault.resourceGroup; SubscriptionId = $vault.subscriptionId
+                }
+            }
+        } catch {
+            Write-Host "  ! Could not read certificates for vault $($vault.name): $($_.Exception.Message)" -ForegroundColor DarkYellow
+        }
+    }
+}
+if ($kvExpirationRows.Count -eq 0) {
+    $kvExpirationRows = @([PSCustomObject]@{ Result = "No Key Vault secrets/certificates found (or permission unavailable - requires Key Vault Get permission on each vault)" })
+}
+$kvExpirationRows | Export-Excel -Path $outputFile -WorksheetName "KeyVaultExpirations" -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
+Write-Host "  [KeyVaultExpirations] $($kvExpirationRows.Count) rows" -ForegroundColor Gray
 
 Run-Query -Sheet "ManagedIdentities" -Query '
 resources
@@ -218,6 +263,32 @@ resources
 | extend skuName=sku.name, redundancy=properties.storageSettings[0].type
 | project name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
 | order by type asc, name asc'
+
+Run-Query -Sheet "BackupProtectedItems" -Query '
+resources
+| where type == "microsoft.recoveryservices/vaults/backupfabrics/protectioncontainers/protecteditems"
+| extend friendlyName=tostring(properties.friendlyName),
+         protectionStatus=tostring(properties.protectionStatus),
+         lastBackupStatus=tostring(properties.lastBackupStatus),
+         lastBackupTime=tostring(properties.lastBackupTime),
+         policyName=tostring(properties.policyName),
+         protectedItemType=tostring(properties.protectedItemType),
+         workloadType=tostring(properties.workloadType)
+| project friendlyName, protectionStatus, lastBackupStatus, lastBackupTime, policyName, protectedItemType, workloadType, resourceGroup, subscriptionId
+| order by protectionStatus asc'
+
+Run-Query -Sheet "ResourceHealthEvents" -Query '
+resources
+| where type == "microsoft.resourcehealth/events"
+| extend eventType=tostring(properties.eventType),
+         status=tostring(properties.status),
+         title=tostring(properties.title),
+         summary=tostring(properties.summary),
+         level=tostring(properties.level),
+         impactStartTime=tostring(properties.impactStartTime),
+         impactMitigationTime=tostring(properties.impactMitigationTime)
+| project title, eventType, status, level, impactStartTime, impactMitigationTime, summary, subscriptionId
+| order by impactStartTime desc'
 
 Run-Query -Sheet "UnattachedDisks" -Query '
 resources

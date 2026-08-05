@@ -2,8 +2,9 @@
   Azure FinOps Extended Export - Paste into Cloud Shell (PowerShell)
   Approximates the data FinOps Hub (FinOps Toolkit) surfaces, using only
   subscription-level Reader access (no billing-account exports required):
-    - ActualCost              Real monthly spend by service, last 6 months (Cost Management Query API)
+    - ActualCost              Real monthly spend by service & region, last 6 months (Cost Management Query API)
     - ReservationDetails      Reservation utilization (billing-account scope, best-effort)
+    - Budgets                 Configured budgets vs. current spend (Consumption Budgets API)
     - UnattachedPublicIPs     Static public IPs not attached to any resource
     - StoppedVMs              VMs stopped but not deallocated (still billed for compute)
     - BackendlessAppGateways  Application Gateways with no backend pool
@@ -51,6 +52,25 @@ try {
 }
 $headers = if ($accessToken) { @{ Authorization = "Bearer $accessToken"; 'Content-Type' = 'application/json' } } else { $null }
 
+function Invoke-RestMethodWithRetry {
+    param([string]$Uri, [string]$Method, [hashtable]$Headers, [string]$Body, [int]$TimeoutSec = 60, [int]$MaxAttempts = 5)
+
+    $attempt = 0
+    do {
+        try {
+            return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -Body $Body -TimeoutSec $TimeoutSec -ErrorAction Stop
+        } catch {
+            $attempt++
+            $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            if ($attempt -ge $MaxAttempts -or $statusCode -notin @(429, 408, 500, 502, 503, 504)) { throw }
+            $retryAfter = try { [int]$_.Exception.Response.Headers['Retry-After'] } catch { 0 }
+            $delaySeconds = if ($retryAfter -gt 0) { $retryAfter } else { [math]::Min(30, [math]::Pow(2, $attempt)) }
+            Write-Host "  Cost Management API returned HTTP $statusCode. Retrying in $delaySeconds seconds (attempt $attempt/$MaxAttempts)..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delaySeconds
+        }
+    } while ($true)
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ActualCost - real monthly spend by service (Cost Management Query API)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -66,7 +86,10 @@ if ($headers) {
         dataset   = @{
             granularity = "Monthly"
             aggregation = @{ totalCost = @{ name = "Cost"; function = "Sum" } }
-            grouping    = @(@{ type = "Dimension"; name = "ServiceName" })
+            grouping    = @(
+                @{ type = "Dimension"; name = "ServiceName" },
+                @{ type = "Dimension"; name = "ResourceLocation" }
+            )
         }
     } | ConvertTo-Json -Depth 10
 
@@ -75,7 +98,7 @@ if ($headers) {
         foreach ($sub in $subs) {
             $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
             try {
-                $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers $headers -Body $body -TimeoutSec 60 -ErrorAction Stop
+                $resp = Invoke-RestMethodWithRetry -Method POST -Uri $uri -Headers $headers -Body $body -TimeoutSec 60
                 $columns = @($resp.properties.columns.name)
                 foreach ($row in @($resp.properties.rows)) {
                     $record = [ordered]@{ Subscription = $sub.Name; SubscriptionId = $sub.Id }
@@ -148,6 +171,52 @@ if ($reservationDetailRows.Count -eq 0) {
 }
 $reservationDetailRows | Export-Excel -Path $outputFile -WorksheetName "ReservationDetails" -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
 Write-Host "  [ReservationDetails] $($reservationDetailRows.Count) rows" -ForegroundColor Gray
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Budgets - configured budgets vs. current spend (Consumption Budgets API, subscription scope)
+# ═══════════════════════════════════════════════════════════════════════════════
+Write-Host "`nChecking configured budgets..." -ForegroundColor Cyan
+$budgetRows = @()
+if ($headers) {
+    try {
+        $subs = Get-AzSubscription -ErrorAction Stop
+        foreach ($sub in $subs) {
+            $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets?api-version=2023-05-01"
+            try {
+                $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+                foreach ($b in @($resp.value)) {
+                    $p = $b.properties
+                    $budgetRows += [PSCustomObject]@{
+                        Subscription   = $sub.Name
+                        SubscriptionId = $sub.Id
+                        BudgetName     = $b.name
+                        Category       = $p.category
+                        Amount         = $p.amount
+                        CurrentSpend   = $p.currentSpend.amount
+                        Currency       = $p.currentSpend.unit
+                        TimeGrain      = $p.timeGrain
+                        StartDate      = $p.timePeriod.startDate
+                        EndDate        = $p.timePeriod.endDate
+                    }
+                }
+            } catch {
+                $status = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+                if ($status -in @(403, 401)) {
+                    Write-Host "  ! No permission to read budgets for subscription $($sub.Name) (needs Cost Management Reader)." -ForegroundColor DarkYellow
+                } else {
+                    Write-Host "  ! Budgets unavailable for subscription $($sub.Name): $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
+            }
+        }
+    } catch {
+        Write-Host "  ! Could not enumerate subscriptions for budget query: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+if ($budgetRows.Count -eq 0) {
+    $budgetRows = @([PSCustomObject]@{ Result = "No budgets configured (or permission unavailable - requires Cost Management Reader)" })
+}
+$budgetRows | Export-Excel -Path $outputFile -WorksheetName "Budgets" -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
+Write-Host "  [Budgets] $($budgetRows.Count) rows" -ForegroundColor Gray
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Extended optimization recommendations (Azure Resource Graph)
