@@ -1683,37 +1683,95 @@ class DashboardGenerator:
         for s in subs_rows:
             subs_rows_by_mgname.setdefault(str(s.get("mgParent", "")), []).append(s)
 
-        MG_NODE_W, MG_NODE_H = 200, 68
-        SUB_NODE_W, SUB_NODE_H = 170, 60
-        DIAGRAM_H_GAP, DIAGRAM_V_GAP = 28, 46
-        DIAGRAM_LEVEL_HEIGHT = max(MG_NODE_H, SUB_NODE_H) + DIAGRAM_V_GAP
+        # Resource Groups + individual resources come from the Discovery phase, not Governance
+        # (Governance's own "ResourceSummary" sheet is just aggregate type+location counts).
+        discovery_data = self.data.get("discovery", {})
 
-        def diagram_children(mg, depth_guard=0):
-            if depth_guard > 12:
+        def disc_real_rows(sheet_name):
+            return [
+                row for row in discovery_data.get(sheet_name, [])
+                if not row.get("Result") and str(row.get("DataStatus", "")).lower() != "nodata"
+            ]
+
+        rg_rows_by_sub: dict = {}
+        for rg in disc_real_rows("ResourceGroups"):
+            rg_rows_by_sub.setdefault(str(rg.get("subscriptionId", "")), []).append(rg)
+
+        _RESOURCE_SHEET_SKIP = {"Subscriptions", "ResourceGroups", "ResourceSummary"}
+        resources_by_rg: dict = {}
+        for sheet_name in discovery_data.keys():
+            if sheet_name in _RESOURCE_SHEET_SKIP:
+                continue
+            for row in disc_real_rows(sheet_name):
+                rg_name = row.get("resourceGroup")
+                sub_id = row.get("subscriptionId")
+                res_name = row.get("name") or row.get("friendlyName")
+                if not rg_name or not sub_id or not res_name:
+                    continue
+                key = (str(sub_id), str(rg_name).lower())
+                resources_by_rg.setdefault(key, []).append({"name": str(res_name), "kind": sheet_name})
+
+        MAX_RESOURCES_PER_RG = 15
+        NODE_SIZES = {
+            "mg": (200, 78),
+            "sub": (170, 72),
+            "rg": (160, 64),
+            "resource": (150, 50),
+            "more": (130, 40),
+        }
+        DIAGRAM_H_GAP, DIAGRAM_V_GAP = 28, 46
+        DIAGRAM_INDENT, DIAGRAM_VLIST_GAP = 28, 10
+        # MG/Sub form the horizontal "parallel" org-chart row; RGs/Resources are lazy,
+        # collapsed-by-default vertical outline lists so they never widen the canvas.
+        HORIZONTAL_KINDS = {"mg", "sub"}
+        _diagram_id_seq = [0]
+
+        def next_diagram_id():
+            _diagram_id_seq[0] += 1
+            return f"dgnode{_diagram_id_seq[0]}"
+
+        def diagram_children(node, depth_guard=0):
+            if depth_guard > 15:
                 return []
-            level = mg_level(mg)
-            level = level if level is not None else 0
-            path = str(mg.get("Path", "") or "")
-            child_mgs = [
-                {"kind": "mg", "data": m, "children": diagram_children(m, depth_guard + 1)}
-                for m in mg_rows
-                if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")
-            ]
-            child_subs = [
-                {"kind": "sub", "data": s, "children": []}
-                for s in subs_rows_by_mgname.get(str(mg.get("DisplayName", "")), [])
-            ]
-            return child_mgs + child_subs
+            kind = node["kind"]
+            data = node["data"]
+            if kind == "mg":
+                level = mg_level(data)
+                level = level if level is not None else 0
+                path = str(data.get("Path", "") or "")
+                children = [
+                    {"kind": "mg", "data": m, "children": []}
+                    for m in mg_rows
+                    if mg_level(m) == level + 1 and str(m.get("Path", "")).startswith(f"{path}/")
+                ] + [
+                    {"kind": "sub", "data": s, "children": []}
+                    for s in subs_rows_by_mgname.get(str(data.get("DisplayName", "")), [])
+                ]
+            elif kind == "sub":
+                sub_id = str(data.get("subscriptionId", ""))
+                children = [{"kind": "rg", "data": rg, "children": []} for rg in rg_rows_by_sub.get(sub_id, [])]
+            elif kind == "rg":
+                sub_id = str(data.get("subscriptionId", ""))
+                rg_name = str(data.get("name", ""))
+                res_list = resources_by_rg.get((sub_id, rg_name.lower()), [])
+                children = [{"kind": "resource", "data": r, "children": []} for r in res_list[:MAX_RESOURCES_PER_RG]]
+                if len(res_list) > MAX_RESOURCES_PER_RG:
+                    children.append({"kind": "more", "data": {"count": len(res_list) - MAX_RESOURCES_PER_RG}, "children": []})
+            else:
+                children = []
+            for c in children:
+                c["children"] = diagram_children(c, depth_guard + 1)
+            return children
 
         def node_width(node):
-            return SUB_NODE_W if node["kind"] == "sub" else MG_NODE_W
+            return NODE_SIZES.get(node["kind"], (170, 60))[0]
 
         def node_height(node):
-            return SUB_NODE_H if node["kind"] == "sub" else MG_NODE_H
+            return NODE_SIZES.get(node["kind"], (170, 60))[1]
 
         def layout_subtree_width(node):
             w = node_width(node)
-            children = node["children"]
+            children = [c for c in node["children"] if c["kind"] in HORIZONTAL_KINDS]
             if not children:
                 node["_w"] = w
                 return w
@@ -1722,7 +1780,7 @@ class DashboardGenerator:
             return node["_w"]
 
         def assign_x(node, left):
-            children = node["children"]
+            children = [c for c in node["children"] if c["kind"] in HORIZONTAL_KINDS]
             if not children:
                 node["_x"] = left + node["_w"] / 2
                 return
@@ -1733,10 +1791,20 @@ class DashboardGenerator:
                 cursor += c["_w"] + DIAGRAM_H_GAP
             node["_x"] = left + node["_w"] / 2
 
+        def assign_ids(node):
+            node["_id"] = next_diagram_id()
+            for c in node["children"]:
+                assign_ids(c)
+
         def build_diagram(roots):
-            tree_roots = [{"kind": "mg", "data": r, "children": diagram_children(r)} for r in roots]
+            tree_roots = [{"kind": "mg", "data": r, "children": []} for r in roots]
+            for root in tree_roots:
+                root["children"] = diagram_children(root)
             if not tree_roots:
                 return ""
+
+            for root in tree_roots:
+                assign_ids(root)
 
             cursor = 0
             for i, root in enumerate(tree_roots):
@@ -1755,48 +1823,44 @@ class DashboardGenerator:
                 max_depth = max(max_depth, depth)
                 flat.append((node, depth))
                 for c in node["children"]:
-                    collect(c, depth + 1)
+                    if c["kind"] in HORIZONTAL_KINDS:
+                        collect(c, depth + 1)
 
             for root in tree_roots:
                 collect(root, 0)
 
-            def center_y(depth):
-                return 24 + depth * DIAGRAM_LEVEL_HEIGHT + max(MG_NODE_H, SUB_NODE_H) / 2
-
-            diagram_w = max(total_w, MG_NODE_W) + 40
-            diagram_h = 24 + (max_depth + 1) * DIAGRAM_LEVEL_HEIGHT + 20
-
-            links_svg = []
-            nodes_html = []
+            depth_height = {}
             for node, depth in flat:
-                w = node_width(node)
-                h = node_height(node)
-                x = node["_x"]
-                y = center_y(depth)
-                y_bottom = y + h / 2
-                for child in node["children"]:
-                    cy_top = center_y(depth + 1) - node_height(child) / 2
-                    mid_y = (y_bottom + cy_top) / 2
-                    links_svg.append(
-                        f'<path d="M {x:.1f},{y_bottom:.1f} C {x:.1f},{mid_y:.1f} '
-                        f'{child["_x"]:.1f},{mid_y:.1f} {child["_x"]:.1f},{cy_top:.1f}" class="mg-diagram-link" fill="none" />'
-                    )
+                depth_height[depth] = max(depth_height.get(depth, 0), node_height(node))
 
-                if node["kind"] == "sub":
-                    sub = node["data"]
-                    sub_id = str(sub.get("subscriptionId", ""))
-                    p_count = len([p for p in policy_assignments if str(p.get("subscriptionId", "")) == sub_id])
-                    r_count = len([r for r in role_assignments if str(r.get("subscriptionId", "")) == sub_id])
-                    name = str(sub.get("name", sub_id) or sub_id)
-                    icon = self._azure_icon("subscriptions")
-                    onclick_attr = ""
-                    box_class = "mg-diagram-node mg-diagram-node-sub"
-                else:
-                    mg = node["data"]
-                    mg_id = str(mg.get("Id", ""))
-                    p_count = len([p for p in policy_assignments if scope_matches(p, mg)])
-                    r_count = len([r for r in role_assignments if scope_matches(r, mg)])
-                    name = str(mg.get("DisplayName", mg_id) or mg_id)
+            depth_top = {}
+            cursor_y = 24
+            for d in range(max_depth + 1):
+                depth_top[d] = cursor_y
+                cursor_y += depth_height.get(d, 0) + DIAGRAM_V_GAP
+            diagram_h = cursor_y + 12
+
+            def center_y(depth):
+                return depth_top[depth] + depth_height.get(depth, 0) / 2
+
+            for node, depth in flat:
+                node["_y"] = center_y(depth)
+
+            diagram_w = max(total_w, NODE_SIZES["mg"][0]) + 40
+
+            def render_node_box(node):
+                kind = node["kind"]
+                data = node["data"]
+                w, h = node_width(node), node_height(node)
+                x, y = node["_x"], node["_y"]
+                onclick_attr = ""
+                icon = ""
+                expand_html = ""
+                if kind == "mg":
+                    mg_id = str(data.get("Id", ""))
+                    p_count = len([p for p in policy_assignments if scope_matches(p, data)])
+                    r_count = len([r for r in role_assignments if scope_matches(r, data)])
+                    name = str(data.get("DisplayName", mg_id) or mg_id)
                     icon = self._azure_icon("management-groups")
                     onclick_js = (
                         "var el=document.getElementById('mg-scope-" + escape(mg_id) + "'); "
@@ -1804,25 +1868,121 @@ class DashboardGenerator:
                     )
                     onclick_attr = f' onclick="{onclick_js}" style="cursor:pointer;"'
                     box_class = "mg-diagram-node mg-diagram-node-mg"
+                    badges = (
+                        f'<span class="mg-badge mg-badge-policy" title="{p_count} policy assignments">{p_count}</span>'
+                        f'<span class="mg-badge mg-badge-rbac" title="{r_count} role assignments">{r_count}</span>'
+                    )
+                elif kind == "sub":
+                    sub_id = str(data.get("subscriptionId", ""))
+                    p_count = len([p for p in policy_assignments if str(p.get("subscriptionId", "")) == sub_id])
+                    r_count = len([r for r in role_assignments if str(r.get("subscriptionId", "")) == sub_id])
+                    name = str(data.get("name", sub_id) or sub_id)
+                    icon = self._azure_icon("subscriptions")
+                    box_class = "mg-diagram-node mg-diagram-node-sub"
+                    badges = (
+                        f'<span class="mg-badge mg-badge-policy" title="{p_count} policy assignments">{p_count}</span>'
+                        f'<span class="mg-badge mg-badge-rbac" title="{r_count} role assignments">{r_count}</span>'
+                    )
+                    if node["children"]:
+                        expand_html = (
+                            f'<button type="button" class="mg-diagram-expand" aria-expanded="false" '
+                            f'onclick="toggleDiagramNode(event, \'{node["_id"]}\')">'
+                            f'<span class="mg-diagram-expand-icon">\u25b8</span> {len(node["children"])} '
+                            f'{bi("RGs", "GR")}</button>'
+                        )
+                elif kind == "rg":
+                    name = str(data.get("name", "") or "")
+                    loc = str(data.get("location", "") or "")
+                    icon = '<span class="mg-diagram-emoji">\U0001F4C1</span>'
+                    box_class = "mg-diagram-node mg-diagram-node-rg"
+                    badges = f'<span class="mg-diagram-restype">{escape(loc)}</span>' if loc else ""
+                    if node["children"]:
+                        real_count = sum(1 for c in node["children"] if c["kind"] == "resource")
+                        more_child = next((c for c in node["children"] if c["kind"] == "more"), None)
+                        total_count = real_count + (more_child["data"]["count"] if more_child else 0)
+                        expand_html = (
+                            f'<button type="button" class="mg-diagram-expand" aria-expanded="false" '
+                            f'onclick="toggleDiagramNode(event, \'{node["_id"]}\')">'
+                            f'<span class="mg-diagram-expand-icon">\u25b8</span> {total_count} '
+                            f'{bi("resources", "recursos")}</button>'
+                        )
+                elif kind == "resource":
+                    name = str(data.get("name", "") or "")
+                    box_class = "mg-diagram-node mg-diagram-node-resource"
+                    badges = f'<span class="mg-diagram-restype">{escape(str(data.get("kind", "")))}</span>'
+                else:  # "more"
+                    count = data.get("count", 0)
+                    return (
+                        f'<foreignObject x="{x - w / 2:.1f}" y="{y - h / 2:.1f}" width="{w}" height="{h}">'
+                        '<div xmlns="http://www.w3.org/1999/xhtml" class="mg-diagram-node mg-diagram-node-more">'
+                        f'+ {count} {bi("more", "m\u00e1s")}</div></foreignObject>'
+                    )
 
                 label = name
-                avail_px = w - 16 - 6 - 20
+                avail_px = w - (16 if icon else 0) - 6 - 20
                 max_chars = max(6, int(avail_px / 6.6))
                 if len(label) > max_chars:
                     label = label[: max_chars - 1] + "\u2026"
-                nodes_html.append(
+                return (
                     f'<foreignObject x="{x - w / 2:.1f}" y="{y - h / 2:.1f}" width="{w}" height="{h}">'
                     f'<div xmlns="http://www.w3.org/1999/xhtml" class="{box_class}" title="{escape(name)}"{onclick_attr}>'
                     f'<div class="mg-diagram-name">{icon}<span>{escape(label)}</span></div>'
-                    '<div class="mg-diagram-badges">'
-                    f'<span class="mg-badge mg-badge-policy" title="{p_count} policy assignments">{p_count}</span>'
-                    f'<span class="mg-badge mg-badge-rbac" title="{r_count} role assignments">{r_count}</span>'
-                    '</div></div></foreignObject>'
+                    f'<div class="mg-diagram-badges">{badges}</div>{expand_html}</div></foreignObject>'
                 )
 
+            def render_vertical_list(parent, children, indent_level):
+                # Renders RG/Resource children as an indented vertical outline below `parent`
+                # so they grow downward (scrollable) instead of widening the canvas.
+                trunk_x = parent["_x"]
+                item_left = trunk_x + DIAGRAM_INDENT * indent_level
+                parent_bottom_y = parent["_y"] + node_height(parent) / 2
+                y = parent_bottom_y + DIAGRAM_VLIST_GAP
+                parts = []
+                for child in children:
+                    ch, cw = node_height(child), node_width(child)
+                    child["_y"] = y + ch / 2
+                    child["_x"] = item_left + cw / 2
+                    mid_y = child["_y"]
+                    parts.append(
+                        f'<path d="M {trunk_x:.1f},{parent_bottom_y:.1f} L {trunk_x:.1f},{mid_y:.1f} '
+                        f'L {item_left:.1f},{mid_y:.1f}" class="mg-diagram-link" fill="none" />'
+                    )
+                    parts.append(render_node_box(child))
+                    nested = [c for c in child["children"] if c["kind"] not in HORIZONTAL_KINDS]
+                    if nested:
+                        nested_html = render_vertical_list(child, nested, indent_level + 1)
+                        parts.append(
+                            f'<g class="diagram-subtree" data-owner="{child["_id"]}" style="display:none">'
+                            f'{nested_html}</g>'
+                        )
+                    y += ch + DIAGRAM_VLIST_GAP
+                return "".join(parts)
+
+            def render_subtree(node):
+                parts = [render_node_box(node)]
+                for child in node["children"]:
+                    if child["kind"] not in HORIZONTAL_KINDS:
+                        continue
+                    y_bottom = node["_y"] + node_height(node) / 2
+                    y_top = child["_y"] - node_height(child) / 2
+                    mid_y = (y_bottom + y_top) / 2
+                    link = (
+                        f'<path d="M {node["_x"]:.1f},{y_bottom:.1f} C {node["_x"]:.1f},{mid_y:.1f} '
+                        f'{child["_x"]:.1f},{mid_y:.1f} {child["_x"]:.1f},{y_top:.1f}" class="mg-diagram-link" fill="none" />'
+                    )
+                    parts.append(link + render_subtree(child))
+                vlist_children = [c for c in node["children"] if c["kind"] not in HORIZONTAL_KINDS]
+                if vlist_children:
+                    vlist_html = render_vertical_list(node, vlist_children, 1)
+                    parts.append(
+                        f'<g class="diagram-subtree" data-owner="{node["_id"]}" style="display:none">{vlist_html}</g>'
+                    )
+                return "".join(parts)
+
+            body = "".join(render_subtree(root) for root in tree_roots)
             svg = (
                 f'<svg class="mg-diagram-svg" viewBox="0 0 {diagram_w:.0f} {diagram_h:.0f}" '
-                f'width="{diagram_w:.0f}" height="{diagram_h:.0f}">' + "".join(links_svg) + "".join(nodes_html) + "</svg>"
+                f'width="{diagram_w:.0f}" height="{diagram_h:.0f}">{body}</svg>'
             )
             return f'<div class="mg-diagram-wrap">{svg}</div>'
 
@@ -3429,23 +3589,39 @@ body {{
 .mg-badge-rbac {{ background: rgba(255, 149, 0, 0.14); color: var(--cp-warning); }}
 .mg-badge-subs {{ background: rgba(48, 209, 88, 0.12); color: var(--cp-success); }}
 .mg-sub-leaf {{ font-size: 14px; color: var(--cp-text-muted); padding: 6px 0; list-style: none; display: flex; align-items: center; gap: 8px; }}
-.mg-diagram-wrap {{ overflow-x: auto; padding: 8px 0 18px; }}
-.mg-diagram-svg {{ display: block; }}
+.mg-diagram-wrap {{ overflow-x: auto; padding: 8px 0 18px; text-align: center; }}
+.mg-diagram-svg {{ display: inline-block; }}
 .mg-diagram-link {{ stroke: var(--cp-border); stroke-width: 2; }}
 .mg-diagram-node {{
     box-sizing: border-box; width: 100%; height: 100%; background: var(--cp-surface); border: 1px solid var(--cp-border);
     border-top-width: 3px; border-radius: var(--cp-radius-md); box-shadow: var(--cp-shadow); overflow: hidden;
-    display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; padding: 8px 10px;
+    display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; padding: 8px 10px;
     font-family: inherit;
 }}
 .mg-diagram-node-mg {{ border-top-color: var(--cp-link); }}
 .mg-diagram-node-sub {{ border-top-color: var(--cp-success); }}
+.mg-diagram-node-rg {{ border-top-color: var(--cp-warning); }}
+.mg-diagram-node-resource {{ border-top-color: var(--cp-border); }}
+.mg-diagram-node-more {{
+    border-style: dashed; border-top-width: 1px; color: var(--cp-text-muted); font-size: 12px; font-weight: 590;
+    box-shadow: none; background: transparent;
+}}
 .mg-diagram-name {{
     display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; width: 100%; flex: 0 0 auto;
     overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }}
 .mg-diagram-name .az-icon {{ width: 16px; height: 16px; flex-shrink: 0; }}
+.mg-diagram-emoji {{ font-size: 13px; line-height: 1; flex-shrink: 0; }}
 .mg-diagram-badges {{ display: flex; gap: 6px; flex: 0 0 auto; }}
+.mg-diagram-restype {{
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cp-text-muted);
+}}
+.mg-diagram-expand {{
+    all: unset; cursor: pointer; font-size: 11px; font-weight: 600; color: var(--cp-link);
+    display: flex; align-items: center; gap: 3px; flex: 0 0 auto;
+}}
+.mg-diagram-expand-icon {{ display: inline-block; font-size: 9px; transition: transform 0.15s var(--cp-ease); }}
+.mg-diagram-expand[aria-expanded="true"] .mg-diagram-expand-icon {{ transform: rotate(90deg); }}
 .scope-insights {{ display: flex; flex-direction: column; gap: 6px; }}
 .scope-detail {{
     background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); padding: 10px 14px;
@@ -3876,6 +4052,7 @@ function setDashboardView(view, animate) {{
             var panel = document.getElementById(DASHBOARD_VIEWS[j] + 'View');
             if (panel) {{ panel.hidden = DASHBOARD_VIEWS[j] !== normalized; }}
         }}
+        if (normalized === 'governance') {{ recalcAllDiagramBoxes(); }}
     }} else {{
         prevPanel.classList.add('view-fade-out');
         window.setTimeout(function() {{
@@ -3883,6 +4060,7 @@ function setDashboardView(view, animate) {{
             prevPanel.classList.remove('view-fade-out');
             nextPanel.hidden = false;
             nextPanel.classList.add('view-fade-in');
+            if (normalized === 'governance') {{ recalcAllDiagramBoxes(); }}
             requestAnimationFrame(function() {{
                 requestAnimationFrame(function() {{ nextPanel.classList.remove('view-fade-in'); }});
             }});
@@ -3893,6 +4071,37 @@ function setDashboardView(view, animate) {{
     try {{ localStorage.setItem('wafDashboardView', normalized); }} catch (e) {{}}
 }}
 window.addEventListener('resize', function() {{ moveTabThumb(currentDashboardView, true); }});
+
+/* ---- Governance hierarchy diagram: lazy-expand Resource Groups / Resources ---- */
+function recalcDiagramBox(svg) {{
+    if (!svg) return;
+    try {{
+        var bbox = svg.getBBox();
+        if (!bbox.width || !bbox.height) return;
+        var pad = 16;
+        var minX = bbox.x - pad;
+        var minY = bbox.y - pad;
+        var w = bbox.width + pad * 2;
+        var h = bbox.height + pad * 2;
+        svg.setAttribute('viewBox', minX + ' ' + minY + ' ' + w + ' ' + h);
+        svg.setAttribute('width', Math.round(w));
+        svg.setAttribute('height', Math.round(h));
+    }} catch (e) {{}}
+}}
+function recalcAllDiagramBoxes() {{
+    var svgs = document.querySelectorAll('.mg-diagram-svg');
+    for (var i = 0; i < svgs.length; i++) {{ recalcDiagramBox(svgs[i]); }}
+}}
+function toggleDiagramNode(evt, ownerId) {{
+    evt.stopPropagation();
+    var group = document.querySelector('g.diagram-subtree[data-owner="' + ownerId + '"]');
+    if (!group) return;
+    var btn = evt.currentTarget;
+    var willExpand = group.style.display === 'none';
+    group.style.display = willExpand ? '' : 'none';
+    btn.setAttribute('aria-expanded', String(willExpand));
+    recalcDiagramBox(group.closest('svg'));
+}}
 
 /* ---- Action items: dismiss (persisted) + manually-added custom items (client-side only, localStorage) ---- */
 var ACTION_DISMISSED_KEY = 'wafDismissedActions';
