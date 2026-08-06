@@ -115,6 +115,23 @@ function Write-SecuritySheet {
     Write-Host "  [$WorksheetName] $($Rows.Count) data rows" -ForegroundColor Gray
 }
 
+function Invoke-SearchAzGraphWithRetry {
+    param([hashtable]$Parameters, [int]$MaxAttempts = 5)
+    $attempt = 0
+    do {
+        try {
+            return Search-AzGraph @Parameters -ErrorAction Stop
+        } catch {
+            $attempt++
+            $statusCode = Get-HttpStatusCode -ErrorRecord $_
+            if ($attempt -ge $MaxAttempts -or $statusCode -notin @(408, 429, 500, 502, 503, 504)) { throw }
+            $delaySeconds = [math]::Min(30, [math]::Pow(2, $attempt))
+            Write-Host "  Resource Graph returned HTTP $statusCode. Retrying in $delaySeconds seconds..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delaySeconds
+        }
+    } while ($true)
+}
+
 function Invoke-AzureResourceGraphQuery {
     param([string]$Query)
 
@@ -123,7 +140,7 @@ function Invoke-AzureResourceGraphQuery {
     do {
         $parameters = @{ Query = $Query; First = 1000 }
         if ($skipToken) { $parameters.SkipToken = $skipToken }
-        $result = Search-AzGraph @parameters
+        $result = Invoke-SearchAzGraphWithRetry -Parameters $parameters
         foreach ($row in @($result.Data)) { $allRows.Add($row) }
         $skipToken = $result.SkipToken
     } while ($skipToken)

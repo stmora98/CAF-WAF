@@ -49,6 +49,27 @@ function Test-NonCompliant {
     return $s -in @('false', 'non-compliant', 'noncompliant', 'no')
 }
 
+# ─── Resource Graph retry (handles 429/5xx throttling across large multi-subscription tenants;
+# used by the sequential PS<7 fallback below - the parallel branch inlines its own copy since
+# functions defined here aren't visible inside ForEach-Object -Parallel runspaces) ──
+function Invoke-SearchAzGraphWithRetry {
+    param([hashtable]$Parameters, [int]$MaxAttempts = 6)
+    $attempt = 0
+    do {
+        try {
+            return Search-AzGraph @Parameters -ErrorAction Stop
+        } catch {
+            $attempt++
+            $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
+            if ($attempt -ge $MaxAttempts -or -not $transient) { throw }
+            $delaySeconds = [math]::Min(60, [math]::Pow(2, $attempt))
+            Write-Host "  Resource Graph throttled or unavailable. Retrying in $delaySeconds seconds (attempt $attempt/$MaxAttempts)..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delaySeconds
+        }
+    } while ($true)
+}
+
 Write-Host "`n=== Azure Review Checklists (community WAF checks) ===" -ForegroundColor Cyan
 
 if (-not (Test-Path $checklistsDir)) {
@@ -122,7 +143,19 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
             do {
                 $p = @{ Query = $group.Name; First = 1000; DefaultProfile = $ctx }
                 if ($skip) { $p['SkipToken'] = $skip }
-                $r = Search-AzGraph @p -ErrorAction Stop
+                $queryAttempt = 0
+                do {
+                    try {
+                        $r = Search-AzGraph @p -ErrorAction Stop
+                        break
+                    } catch {
+                        $queryAttempt++
+                        $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+                        $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
+                        if ($queryAttempt -ge 6 -or -not $transient) { throw }
+                        Start-Sleep -Seconds ([math]::Min(60, [math]::Pow(2, $queryAttempt)))
+                    }
+                } while ($true)
                 $rows += $r.Data
                 $skip = $r.SkipToken
             } while ($skip)
@@ -177,7 +210,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
             do {
                 $p = @{ Query = $group.Name; First = 1000 }
                 if ($skip) { $p['SkipToken'] = $skip }
-                $r = Search-AzGraph @p -ErrorAction Stop
+                $r = Invoke-SearchAzGraphWithRetry -Parameters $p
                 $rows += $r.Data
                 $skip = $r.SkipToken
             } while ($skip)

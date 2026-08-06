@@ -50,13 +50,32 @@ Write-Host "  Output:  $outputDir`n" -ForegroundColor Yellow
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ─── Resource Graph retry (handles 429/5xx throttling across large multi-subscription tenants) ──
+function Invoke-SearchAzGraphWithRetry {
+    param([hashtable]$Parameters, [int]$MaxAttempts = 6)
+    $attempt = 0
+    do {
+        try {
+            return Search-AzGraph @Parameters -ErrorAction Stop
+        } catch {
+            $attempt++
+            $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
+            if ($attempt -ge $MaxAttempts -or -not $transient) { throw }
+            $delaySeconds = [math]::Min(60, [math]::Pow(2, $attempt))
+            Write-Host "  Resource Graph throttled or unavailable. Retrying in $delaySeconds seconds (attempt $attempt/$MaxAttempts)..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delaySeconds
+        }
+    } while ($true)
+}
+
 function Invoke-ARGQuery {
     param([string]$Query)
     $all = @(); $skip = $null
     do {
         $p = @{ Query = $Query; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
-        $r = Search-AzGraph @p
+        $r = Invoke-SearchAzGraphWithRetry -Parameters $p
         $all += $r.Data
         $skip = $r.SkipToken
     } while ($skip)
@@ -83,7 +102,20 @@ $mgData = @()
 function Get-MGHierarchy {
     param([string]$GroupName, [int]$Level = 0, [string]$ParentPath = "")
     try {
-        $mg = Get-AzManagementGroup -GroupName $GroupName -Expand -ErrorAction Stop
+        $mgAttempt = 0
+        $mg = $null
+        do {
+            try {
+                $mg = Get-AzManagementGroup -GroupName $GroupName -Expand -ErrorAction Stop
+                break
+            } catch {
+                $mgAttempt++
+                $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+                $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
+                if ($mgAttempt -ge 6 -or -not $transient) { throw }
+                Start-Sleep -Seconds ([math]::Min(60, [math]::Pow(2, $mgAttempt)))
+            }
+        } while ($true)
         $currentPath = if ($ParentPath) { "$ParentPath/$($mg.DisplayName)" } else { $mg.DisplayName }
         
         $childMGs = @($mg.Children | Where-Object { $_.Type -match 'managementGroups' })

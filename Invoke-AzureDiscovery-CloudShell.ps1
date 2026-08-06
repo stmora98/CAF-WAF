@@ -19,6 +19,25 @@ if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
 }
 Import-Module ImportExcel
 
+# ─── Resource Graph retry (handles 429/5xx throttling across large multi-subscription tenants) ──
+function Invoke-SearchAzGraphWithRetry {
+    param([hashtable]$Parameters, [int]$MaxAttempts = 6)
+    $attempt = 0
+    do {
+        try {
+            return Search-AzGraph @Parameters -ErrorAction Stop
+        } catch {
+            $attempt++
+            $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
+            if ($attempt -ge $MaxAttempts -or -not $transient) { throw }
+            $delaySeconds = [math]::Min(60, [math]::Pow(2, $attempt))
+            Write-Host "  Resource Graph throttled or unavailable. Retrying in $delaySeconds seconds (attempt $attempt/$MaxAttempts)..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delaySeconds
+        }
+    } while ($true)
+}
+
 # ─── Query runner with pagination ────────────────────────────────────────────
 function Run-Query {
     param([string]$Query, [string]$Sheet)
@@ -26,7 +45,7 @@ function Run-Query {
     do {
         $p = @{ Query = $Query; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
-        $r = Search-AzGraph @p
+        $r = Invoke-SearchAzGraphWithRetry -Parameters $p
         $all += $r.Data
         $skip = $r.SkipToken
     } while ($skip)

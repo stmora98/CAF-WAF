@@ -23,13 +23,32 @@ if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
 }
 Import-Module ImportExcel
 
+# ─── Resource Graph retry (handles 429/5xx throttling across large multi-subscription tenants) ──
+function Invoke-SearchAzGraphWithRetry {
+    param([hashtable]$Parameters, [int]$MaxAttempts = 6)
+    $attempt = 0
+    do {
+        try {
+            return Search-AzGraph @Parameters -ErrorAction Stop
+        } catch {
+            $attempt++
+            $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
+            $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
+            if ($attempt -ge $MaxAttempts -or -not $transient) { throw }
+            $delaySeconds = [math]::Min(60, [math]::Pow(2, $attempt))
+            Write-Host "  Resource Graph throttled or unavailable. Retrying in $delaySeconds seconds (attempt $attempt/$MaxAttempts)..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delaySeconds
+        }
+    } while ($true)
+}
+
 function Invoke-GraphQuery {
     param([string]$Query, [string]$Sheet)
     $all = @(); $skip = $null
     do {
         $p = @{ Query = $Query; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
-        $r = Search-AzGraph @p
+        $r = Invoke-SearchAzGraphWithRetry -Parameters $p
         $all += $r.Data
         $skip = $r.SkipToken
     } while ($skip)
@@ -132,14 +151,14 @@ $reservationDetailRows = @()
 if ($headers) {
     try {
         $baUri = "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=2020-05-01"
-        $baResp = Invoke-RestMethod -Method GET -Uri $baUri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+        $baResp = Invoke-RestMethodWithRetry -Uri $baUri -Method GET -Headers $headers -TimeoutSec 60
         $from = (Get-Date).AddDays(-30).ToString('yyyy-MM-dd')
         $to = (Get-Date).ToString('yyyy-MM-dd')
         foreach ($ba in @($baResp.value)) {
             $filter = "properties/UsageDate ge '$from' and properties/UsageDate le '$to'"
             $uri = "https://management.azure.com$($ba.id)/providers/Microsoft.Consumption/reservationDetails?api-version=2023-05-01&`$filter=$([uri]::EscapeDataString($filter))"
             try {
-                $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+                $resp = Invoke-RestMethodWithRetry -Uri $uri -Method GET -Headers $headers -TimeoutSec 60
                 foreach ($item in @($resp.value)) {
                     $p = $item.properties
                     $reservationDetailRows += [PSCustomObject]@{
@@ -183,7 +202,7 @@ if ($headers) {
         foreach ($sub in $subs) {
             $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets?api-version=2023-05-01"
             try {
-                $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+                $resp = Invoke-RestMethodWithRetry -Uri $uri -Method GET -Headers $headers -TimeoutSec 60
                 foreach ($b in @($resp.value)) {
                     $p = $b.properties
                     $budgetRows += [PSCustomObject]@{
