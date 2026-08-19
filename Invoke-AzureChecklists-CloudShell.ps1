@@ -16,6 +16,11 @@ param(
 
 $_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
 $outputFile = Join-Path $_outDir "AzureChecklists_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
+if ($subscriptionIds.Count -eq 0) {
+    $subscriptionIds = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
+}
+if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
 
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force
@@ -133,6 +138,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
     $byQuery | ForEach-Object -Parallel {
         $group = $_
         $ctx = $using:azContext
+        $scopeSubscriptionIds = $using:subscriptionIds
         $bag = $using:resultsBag
         $fails = $using:failCount
         $localPillarMap = $using:pillarMap
@@ -141,7 +147,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
         try {
             $skip = $null
             do {
-                $p = @{ Query = $group.Name; First = 1000; DefaultProfile = $ctx }
+                $p = @{ Query = $group.Name; Subscription = $scopeSubscriptionIds; First = 1000; DefaultProfile = $ctx }
                 if ($skip) { $p['SkipToken'] = $skip }
                 $queryAttempt = 0
                 do {
@@ -208,7 +214,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
         try {
             $skip = $null
             do {
-                $p = @{ Query = $group.Name; First = 1000 }
+                $p = @{ Query = $group.Name; Subscription = $subscriptionIds; First = 1000 }
                 if ($skip) { $p['SkipToken'] = $skip }
                 $r = Invoke-SearchAzGraphWithRetry -Parameters $p
                 $rows += $r.Data

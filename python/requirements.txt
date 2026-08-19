@@ -1,0 +1,9 @@
+azure-identity>=1.17.0
+azure-mgmt-subscription>=3.1.1
+azure-mgmt-resourcegraph>=8.0.0
+azure-mgmt-monitor==6.0.2  # 7.0.0 removed the diagnostic_settings operation group this port depends on
+azure-mgmt-managementgroups>=1.0.0
+azure-keyvault-secrets>=4.8.0
+azure-keyvault-certificates>=4.8.0
+openpyxl>=3.1.2
+requests>=2.31.0

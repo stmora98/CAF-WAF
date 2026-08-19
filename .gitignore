@@ -1,4 +1,6 @@
 AzureWorkshop_*/
 AzureWorkshop/
+*.history.json
 __pycache__/
 *.pyc
+python/.venv/

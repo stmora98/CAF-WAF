@@ -5,6 +5,11 @@
 
 $_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
 $outputFile = Join-Path $_outDir "AzureAdvisor_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
+if ($subscriptionIds.Count -eq 0) {
+    $subscriptionIds = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
+}
+if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
 
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force
@@ -56,7 +61,7 @@ function Run-Query {
     param([string]$Query, [string]$Sheet)
     $all = @(); $skip = $null
     do {
-        $p = @{ Query = $Query; First = 1000 }
+        $p = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
         $r = Invoke-SearchAzGraphWithRetry -Parameters $p
         $all += $r.Data
@@ -186,7 +191,7 @@ try {
     } else { [string]$tokenResponse.Token }
     $headers = @{ Authorization = "Bearer $accessToken" }
 
-    $subs = Get-AzSubscription -ErrorAction Stop
+    $subs = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.Id -in $subscriptionIds })
     foreach ($sub in $subs) {
         $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/reservationRecommendations?api-version=2021-10-01"
         try {

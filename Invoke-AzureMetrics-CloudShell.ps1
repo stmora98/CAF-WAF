@@ -9,6 +9,11 @@ $outputFile = Join-Path $_outDir "AzureMetrics_$(Get-Date -Format 'yyyyMMdd_HHmm
 $daysBack = 30
 $startTime = (Get-Date).AddDays(-$daysBack)
 $endTime = Get-Date
+$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
+if ($subscriptionIds.Count -eq 0) {
+    $subscriptionIds = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
+}
+if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
 
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force
@@ -38,7 +43,7 @@ function Get-AllResourceGraphRows {
     $all = [System.Collections.Generic.List[object]]::new()
     $skip = $null
     do {
-        $p = @{ Query = $Query; First = 1000 }
+        $p = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
         $attempt = 0
         do {

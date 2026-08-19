@@ -1400,6 +1400,66 @@ class InsightEngine:
         return round(sum(self.scores[p] for p in available) / len(available))
 
 
+class ScoreHistoryTracker:
+    """Persists overall/pillar scores and open action-item ids across runs so re-running the
+    workshop against the same environment can show score deltas and highlight resolved items.
+    Stored as a JSON file SIBLING to base_dir (e.g. "AzureWorkshop.history.json" next to
+    "AzureWorkshop/") rather than inside it, since Launch-AzureWorkshop.ps1 wipes/archives
+    that folder on every run."""
+
+    MAX_RUNS = 30
+
+    def __init__(self, base_dir: str):
+        self.path = f"{base_dir.rstrip('/\\')}.history.json"
+        self.runs = self._load()
+
+    def _load(self) -> list:
+        if not os.path.isfile(self.path):
+            return []
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            return loaded.get("runs", []) if isinstance(loaded, dict) else []
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def compare_and_record(self, overall: int, scores: dict, action_items: list, action_item_id_fn) -> dict:
+        """Compare current scores/action items against the most recent previous run, append +
+        persist the current snapshot, and return the comparison (deltas are None on the first run)."""
+        previous = self.runs[-1] if self.runs else None
+
+        current_open = [
+            {"id": action_item_id_fn(a), "pillar": a["pillar"], "title": a["title"], "severity": a["severity"]}
+            for a in action_items
+        ]
+        current_ids = {i["id"] for i in current_open}
+
+        comparison = {"previous": previous, "resolved": [], "new_count": 0, "overall_delta": None, "pillar_deltas": {}}
+        if previous:
+            previous_ids = {i["id"] for i in previous.get("action_items", [])}
+            comparison["resolved"] = [i for i in previous.get("action_items", []) if i["id"] not in current_ids]
+            comparison["new_count"] = len(current_ids - previous_ids)
+            comparison["overall_delta"] = overall - previous.get("overall_score", overall)
+            for pillar, sc in scores.items():
+                prev_sc = previous.get("pillar_scores", {}).get(pillar)
+                comparison["pillar_deltas"][pillar] = (sc - prev_sc) if prev_sc is not None else None
+
+        self.runs.append({
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "overall_score": overall,
+            "pillar_scores": dict(scores),
+            "action_items": current_open,
+        })
+        self.runs = self.runs[-self.MAX_RUNS:]
+        try:
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump({"runs": self.runs}, f, indent=2)
+        except OSError as e:
+            print(f"⚠️  Could not save score history ({self.path}): {e}")
+
+        return comparison
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # HTML DASHBOARD GENERATOR
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1407,10 +1467,11 @@ class InsightEngine:
 class DashboardGenerator:
     """Generates the final consolidated HTML dashboard."""
     
-    def __init__(self, engine: InsightEngine, data: dict, base_dir: Optional[str] = None):
+    def __init__(self, engine: InsightEngine, data: dict, base_dir: Optional[str] = None, progress: Optional[dict] = None):
         self.engine = engine
         self.data = data
         self.base_dir = base_dir
+        self.progress = progress or {"previous": None, "resolved": [], "new_count": 0, "overall_delta": None, "pillar_deltas": {}}
 
     @staticmethod
     def _count_real(rows: list) -> int:
@@ -3112,7 +3173,7 @@ class DashboardGenerator:
             ("policyName", "Policy", "Pol\u00edtica", False),
         ], "No backup-protected items found (vaults exist but nothing is protected, or Backup Reader access is missing).", "No se encontraron elementos protegidos por backup (existen vaults pero nada est\u00e1 protegido, o falta acceso de Backup Reader).")
         health_events_table = render_table(health_events, [
-            ("title", "Event", "Evento", False),
+            ("title_", "Event", "Evento", False),
             ("eventType", "Type", "Tipo", False),
             ("status", "Status", "Estado", False),
             ("level", "Level", "Nivel", False),
@@ -3398,6 +3459,59 @@ class DashboardGenerator:
             {self._render_actions_for_pillar("Operational Excellence")}
         </div>"""
 
+    def _render_progress_banner(self) -> str:
+        """Render the 'since last scan' delta banner (overall/pillar score deltas + resolved
+        items), driven by ScoreHistoryTracker. Renders a first-run note if there's no history yet."""
+        previous = self.progress.get("previous")
+        if not previous:
+            return f"""<div class="progress-banner progress-banner-empty">
+                <span class="progress-icon">🕓</span>
+                <span>{bi("This is the first recorded scan for this environment. Future runs will show score trends and resolved items here.", "Este es el primer escaneo registrado para este entorno. Las pr\u00f3ximas ejecuciones mostrar\u00e1n tendencias de puntaje y elementos resueltos aqu\u00ed.", "Este \u00e9 o primeiro scan registrado para este ambiente. As pr\u00f3ximas execu\u00e7\u00f5es mostrar\u00e3o tend\u00eancias de pontua\u00e7\u00e3o e itens resolvidos aqui.")}</span>
+            </div>"""
+
+        def delta_badge(delta: Optional[int]) -> str:
+            if delta is None:
+                return '<span class="progress-delta progress-delta-neutral">–</span>'
+            if delta > 0:
+                return f'<span class="progress-delta progress-delta-up">▲ +{delta}</span>'
+            if delta < 0:
+                return f'<span class="progress-delta progress-delta-down">▼ {delta}</span>'
+            return '<span class="progress-delta progress-delta-neutral">= 0</span>'
+
+        prev_date = str(previous.get("timestamp", ""))[:16].replace("T", " ")
+        overall_delta_html = delta_badge(self.progress.get("overall_delta"))
+        pillar_chips = "".join(
+            f'<span class="progress-pillar-chip">{bi(str(p), str(PILLAR_ES.get(p, p)), str(PILLAR_PT.get(p, p)))} {delta_badge(d)}</span>'
+            for p, d in self.progress.get("pillar_deltas", {}).items()
+        )
+        resolved = self.progress.get("resolved", [])
+        new_count = self.progress.get("new_count", 0)
+        resolved_html = ""
+        if resolved:
+            resolved_items = "".join(
+                f'<li><span class="severity-badge" style="background:{DashboardConfig.SEVERITY_COLORS.get(r["severity"], "var(--cp-text-muted)")};">{r["severity"].upper()}</span> {escape(r["title"])} <span class="pillar-tag">{escape(r["pillar"])}</span></li>'
+                for r in resolved
+            )
+            resolved_html = f"""<details class="progress-resolved">
+                <summary>✅ {bi(f"{len(resolved)} action item(s) resolved since last scan", f"{len(resolved)} elemento(s) resuelto(s) desde el \u00faltimo escaneo", f"{len(resolved)} item(ns) resolvido(s) desde o \u00faltimo scan")}</summary>
+                <ul class="progress-resolved-list">{resolved_items}</ul>
+            </details>"""
+
+        new_html = ""
+        if new_count:
+            new_html = f'<span class="progress-new-count">{bi(f"+{new_count} new since last scan", f"+{new_count} nuevos desde el \u00faltimo escaneo", f"+{new_count} novos desde o \u00faltimo scan")}</span>'
+
+        return f"""<div class="progress-banner">
+            <div class="progress-banner-row">
+                <span class="progress-icon">📈</span>
+                <span class="progress-title">{bi("Since last scan", "Desde el \u00faltimo escaneo", "Desde o \u00faltimo scan")} ({escape(prev_date)})</span>
+                <span class="progress-overall">{bi("Overall score", "Puntaje general", "Pontua\u00e7\u00e3o geral")}: {overall_delta_html}</span>
+                {new_html}
+            </div>
+            <div class="progress-pillar-row">{pillar_chips}</div>
+            {resolved_html}
+        </div>"""
+
     def _render_score_breakdown(self) -> str:
         """Render the 'why' behind each pillar score per the Advisor Score model."""
         b = self.engine.breakdowns
@@ -3518,6 +3632,7 @@ class DashboardGenerator:
     def generate(self) -> str:
         overall = self.engine.get_overall_score()
         scores = self.engine.scores
+        progress_banner_html = self._render_progress_banner()
         score_breakdown_html = self._render_score_breakdown()
         governance_view_html = self._render_governance_view()
         security_view_html = self._render_security_view()
@@ -3968,6 +4083,31 @@ body {{
     .resource-rec-heading {{ align-items: flex-start; }}
 }}
 
+/* Score continuity ("since last scan") */
+.progress-banner {{
+    background: var(--cp-surface); border-radius: var(--cp-radius-md); padding: 16px 20px; margin-bottom: 20px;
+    border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow);
+}}
+.progress-banner-empty {{ display: flex; align-items: center; gap: 10px; color: var(--cp-text-muted); font-size: 13px; }}
+.progress-banner-row {{ display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; font-size: 14px; }}
+.progress-title {{ font-weight: 600; }}
+.progress-overall {{ color: var(--cp-text-muted); }}
+.progress-delta {{ font-weight: 700; padding: 2px 8px; border-radius: 100px; font-size: 13px; }}
+.progress-delta-up {{ color: var(--cp-success); background: rgba(29, 154, 74, 0.12); }}
+.progress-delta-down {{ color: var(--cp-danger); background: rgba(255, 59, 48, 0.12); }}
+.progress-delta-neutral {{ color: var(--cp-text-muted); background: var(--cp-surface-soft); }}
+.progress-new-count {{ font-size: 12px; color: var(--cp-warning); font-weight: 600; }}
+.progress-pillar-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+.progress-pillar-chip {{
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px;
+    border-radius: 100px; background: var(--cp-surface-soft); border: 1px solid var(--cp-border);
+}}
+.progress-resolved {{ margin-top: 12px; }}
+.progress-resolved summary {{ cursor: pointer; font-size: 13px; font-weight: 600; color: var(--cp-success); }}
+.progress-resolved-list {{ margin: 10px 0 0; padding-left: 4px; list-style: none; font-size: 13px; }}
+.progress-resolved-list li {{ padding: 6px 0; border-top: 1px solid var(--cp-border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+.progress-resolved-list li:first-child {{ border-top: none; }}
+
 /* Stats */
 .stats-row {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -4138,6 +4278,9 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 </div>
 
 <main id="overviewView" class="dashboard-view" role="tabpanel" aria-labelledby="overviewTab">
+<!-- Score continuity since last scan -->
+{progress_banner_html}
+
 <!-- Overall Score + Pillar Breakdown -->
 <div class="score-section">
     <div class="overall-score">
@@ -4688,10 +4831,23 @@ def main():
         print(f"   {status} {pillar:<25} {bar} {score}/100")
     print(f"\n   Overall WAF Score: {engine.get_overall_score()}/100")
     print(f"   Action Items: {len(engine.action_items)}")
-    
+
+    # Compare against the last recorded run for this environment (score deltas + resolved items)
+    history = ScoreHistoryTracker(base_dir)
+    progress = history.compare_and_record(
+        engine.get_overall_score(), engine.scores, engine.action_items, DashboardGenerator._action_item_id
+    )
+    if progress["previous"]:
+        print(f"\n📈 Since last scan ({str(progress['previous'].get('timestamp', ''))[:16]}):")
+        print(f"   Overall score delta: {progress['overall_delta']:+d}")
+        print(f"   Resolved action items: {len(progress['resolved'])}")
+        print(f"   New action items: {progress['new_count']}")
+    else:
+        print("\n📈 First recorded scan for this environment — no history to compare against yet.")
+
     # Generate dashboard
     print("\n🎨 Generating dashboard HTML...")
-    generator = DashboardGenerator(engine, data, base_dir)
+    generator = DashboardGenerator(engine, data, base_dir, progress=progress)
     html = generator.generate()
     
     output_path = os.path.join(base_dir, "07_Dashboard", "WAF_Dashboard.html")

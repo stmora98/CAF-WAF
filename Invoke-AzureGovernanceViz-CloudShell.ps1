@@ -38,6 +38,11 @@ Import-Module Az.ResourceGraph
 
 $context = Get-AzContext
 $tenantId = $context.Tenant.Id
+$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
+if ($subscriptionIds.Count -eq 0) {
+    $subscriptionIds = @(Get-AzSubscription -TenantId $tenantId -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
+}
+if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in tenant $tenantId." }
 
 Write-Host "`n╔══════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║  Azure Governance Visualizer (Lite)          ║" -ForegroundColor Cyan
@@ -73,7 +78,7 @@ function Invoke-ARGQuery {
     param([string]$Query)
     $all = @(); $skip = $null
     do {
-        $p = @{ Query = $Query; First = 1000 }
+        $p = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
         $r = Invoke-SearchAzGraphWithRetry -Parameters $p
         $all += $r.Data

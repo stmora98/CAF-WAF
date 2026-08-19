@@ -155,19 +155,15 @@ Write-Host "  All prerequisites satisfied.`n" -ForegroundColor Green
 function Connect-AzAccountWithWamFallback {
     param([switch]$ForceAccountSelection)
 
-    # Clear only the local Az PowerShell context (not the Windows/WAM account cache), so
-    # Connect-AzAccount always shows the account picker instead of silently reusing whichever
-    # account was last active - but WAM SSO still means picking a cached account is a single click.
-    Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null
-
     if ($ForceAccountSelection) {
         # Hard reset: also disable WAM so even the picker's cached tokens are bypassed and a
         # full interactive sign-in page is shown. Use this if the account picker itself seems stuck.
+        Disconnect-AzAccount -ErrorAction SilentlyContinue | Out-Null
         Write-Host "  Forcing a full interactive sign-in (WAM disabled for this run)..." -ForegroundColor DarkGray
         if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
             try { Update-AzConfig -EnableLoginByWam $false -Scope Process -ErrorAction Stop | Out-Null } catch { }
         }
-        Connect-AzAccount -ErrorAction Stop
+        Connect-AzAccount -SkipContextPopulation -ErrorAction Stop
         return
     }
 
@@ -179,25 +175,35 @@ function Connect-AzAccountWithWamFallback {
         }
     }
     try {
-        Connect-AzAccount -ErrorAction Stop
+        Connect-AzAccount -SkipContextPopulation -ErrorAction Stop
     } catch {
         Write-Host "  WAM sign-in failed ($($_.Exception.Message)). Retrying with device code authentication..." -ForegroundColor DarkYellow
         if (Get-Command Update-AzConfig -ErrorAction SilentlyContinue) {
             try { Update-AzConfig -EnableLoginByWam $false -ErrorAction Stop | Out-Null } catch { }
         }
-        Connect-AzAccount -UseDeviceAuthentication
+        Connect-AzAccount -UseDeviceAuthentication -SkipContextPopulation
     }
 }
 
-# Always show the account picker (SSO-backed via WAM, so cached accounts are one click -
-# no cached context is silently reused across runs).
-Write-Host "Signing in..." -ForegroundColor Yellow
-Connect-AzAccountWithWamFallback -ForceAccountSelection:$ForceAccountSelection
 $context = Get-AzContext
+if ($ForceAccountSelection -or -not $context) {
+    Write-Host "Signing in..." -ForegroundColor Yellow
+    Connect-AzAccountWithWamFallback -ForceAccountSelection:$ForceAccountSelection | Out-Null
+    $context = Get-AzContext
+}
+if (-not $context) { throw "Azure authentication did not create a usable tenant context." }
+
+$assessmentSubscriptions = @(Get-AzSubscription -TenantId $context.Tenant.Id -ErrorAction Stop |
+    Where-Object { $_.State -eq 'Enabled' })
+if ($assessmentSubscriptions.Count -eq 0) {
+    throw "No enabled subscriptions are accessible in tenant $($context.Tenant.Id)."
+}
+$env:AZWORKSHOP_SUBSCRIPTION_IDS = ($assessmentSubscriptions.Id -join ',')
 
 Write-Host "Azure WAF/CAF Workshop - Discovery Launcher" -ForegroundColor Cyan
 Write-Host "Tenant:  $($context.Tenant.Id)" -ForegroundColor Cyan
 Write-Host "Account: $($context.Account.Id)" -ForegroundColor Cyan
+Write-Host "Scope:   $($assessmentSubscriptions.Count) enabled subscription(s)" -ForegroundColor Cyan
 Write-Host "Output:  $OutputDir`n" -ForegroundColor Cyan
 
 $startTime = Get-Date
@@ -309,6 +315,7 @@ if ($pythonCmd) {
 
 # Clean up env var
 Remove-Item Env:\AZWORKSHOP_OUTPUT -ErrorAction SilentlyContinue
+Remove-Item Env:\AZWORKSHOP_SUBSCRIPTION_IDS -ErrorAction SilentlyContinue
 
 # === SUMMARY ===
 $elapsed = (Get-Date) - $startTime

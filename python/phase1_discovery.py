@@ -1,91 +1,59 @@
-<#
-.SYNOPSIS
-    Azure WAF/CAF Discovery - Single paste-and-run script for Cloud Shell.
-.DESCRIPTION
-    Paste this entire script into Azure Cloud Shell (PowerShell).
-    It runs 23 Resource Graph queries and exports results to one Excel file.
-.EXAMPLE
-    # Just paste the whole script into Cloud Shell and press Enter.
-    # Download the output file from: ~/AzureDiscovery_<timestamp>.xlsx
-#>
+"""Azure WAF/CAF Discovery - Python port of Invoke-AzureDiscovery-CloudShell.ps1.
 
-# ─── Config ──────────────────────────────────────────────────────────────────
-$_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
-$outputFile = Join-Path $_outDir "AzureDiscovery_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
-$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
-if ($subscriptionIds.Count -eq 0) {
-    $subscriptionIds = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
-}
-if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
+Runs Azure Resource Graph queries across every enabled subscription and exports one
+Excel workbook (matches the PowerShell version's sheet names/columns 1:1 so
+generate-dashboard.py can consume either output interchangeably).
+"""
+from __future__ import annotations
 
-# ─── Install ImportExcel if missing ──────────────────────────────────────────
-if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
-    Install-Module ImportExcel -Scope CurrentUser -Force
-}
-Import-Module ImportExcel
+import bootstrap
+bootstrap.ensure_dependencies()
 
-# ─── Resource Graph retry (handles 429/5xx throttling across large multi-subscription tenants) ──
-function Invoke-SearchAzGraphWithRetry {
-    param([hashtable]$Parameters, [int]$MaxAttempts = 6)
-    $attempt = 0
-    do {
-        try {
-            return Search-AzGraph @Parameters -ErrorAction Stop
-        } catch {
-            $attempt++
-            $statusCode = try { [int]$_.Exception.Response.StatusCode } catch { 0 }
-            $transient = ($statusCode -in 429, 408, 500, 502, 503, 504) -or ($_.Exception.Message -match '429|too many requests|throttl|gateway timeout|server error|service unavailable')
-            if ($attempt -ge $MaxAttempts -or -not $transient) { throw }
-            $delaySeconds = [math]::Min(60, [math]::Pow(2, $attempt))
-            Write-Host "  Resource Graph throttled or unavailable. Retrying in $delaySeconds seconds (attempt $attempt/$MaxAttempts)..." -ForegroundColor DarkYellow
-            Start-Sleep -Seconds $delaySeconds
-        }
-    } while ($true)
-}
+from datetime import datetime, timezone
 
-# ─── Query runner with pagination ────────────────────────────────────────────
-function Run-Query {
-    param([string]$Query, [string]$Sheet)
-    $all = @(); $skip = $null
-    do {
-        $p = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
-        if ($skip) { $p['SkipToken'] = $skip }
-        $r = Invoke-SearchAzGraphWithRetry -Parameters $p
-        $all += $r.Data
-        $skip = $r.SkipToken
-    } while ($skip)
+from azure.core.exceptions import HttpResponseError
+from azure.keyvault.certificates import CertificateClient
+from azure.keyvault.secrets import SecretClient
 
-    if ($all.Count -eq 0) { $all = @([PSCustomObject]@{ Result = "No resources found" }) }
-    $all | Export-Excel -Path $outputFile -WorksheetName $Sheet -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
-    Write-Host "  [$Sheet] $($all.Count) rows" -ForegroundColor Gray
-    return $all
-}
+from common.argquery import run_query
+from common.auth import get_credential, resolve_subscription_ids
+from common.excelio import add_sheet, make_output_path, new_workbook, save
 
-Write-Host "`n=== Azure WAF/CAF Discovery ===" -ForegroundColor Cyan
-Write-Host "Output: $outputFile`n" -ForegroundColor Yellow
 
-# ─── Run all queries ─────────────────────────────────────────────────────────
+def run(credential=None, subscription_ids=None) -> str:
+    credential = credential or get_credential()
+    subscription_ids = subscription_ids or resolve_subscription_ids(credential)
+    output_path = make_output_path("AzureDiscovery")
+    wb = new_workbook()
 
-Write-Host "Querying environment..." -ForegroundColor Green
+    print("\n=== Azure WAF/CAF Discovery ===")
+    print(f"Output: {output_path}\n")
+    print("Querying environment...")
 
-Run-Query -Sheet "Subscriptions" -Query '
+    def q(sheet: str, query: str):
+        rows = run_query(credential, subscription_ids, query)
+        count = add_sheet(wb, sheet, rows, empty_message="No resources found")
+        print(f"  [{sheet}] {count} rows")
+        return rows
+
+    q("Subscriptions", """
 resourcecontainers
 | where type == "microsoft.resources/subscriptions"
 | project subscriptionId, name, state=properties.state, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "ResourceGroups" -Query '
+    q("ResourceGroups", """
 resourcecontainers
 | where type == "microsoft.resources/subscriptions/resourcegroups"
 | project name, location, subscriptionId, tags, provisioningState=properties.provisioningState
-| order by subscriptionId asc, name asc'
+| order by subscriptionId asc, name asc""")
 
-Run-Query -Sheet "ResourceSummary" -Query '
+    q("ResourceSummary", """
 resources
 | summarize Count=count() by type, location
-| order by Count desc'
+| order by Count desc""")
 
-Run-Query -Sheet "VMs" -Query '
+    q("VMs", """
 resources
 | where type == "microsoft.compute/virtualmachines"
 | extend vmSize = properties.hardwareProfile.vmSize,
@@ -94,16 +62,16 @@ resources
          powerState = properties.extended.instanceView.powerState.displayStatus,
          zone = tostring(zones[0])
 | project name, resourceGroup, subscriptionId, location, vmSize, osType, osSku, powerState, zone, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "AppServices" -Query '
+    q("AppServices", """
 resources
 | where type in ("microsoft.web/sites", "microsoft.web/serverfarms")
 | extend kind_=kind, state=properties.state, httpsOnly=properties.httpsOnly
 | project name, type, resourceGroup, subscriptionId, location, kind_, state, httpsOnly, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-Run-Query -Sheet "AKS" -Query '
+    q("AKS", """
 resources
 | where type == "microsoft.containerservice/managedclusters"
 | extend k8sVersion = properties.kubernetesVersion,
@@ -112,27 +80,27 @@ resources
          networkPlugin = properties.networkProfile.networkPlugin,
          tier = sku.tier
 | project name, resourceGroup, subscriptionId, location, k8sVersion, nodeCount, nodeVmSize, networkPlugin, tier, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "VNets" -Query '
+    q("VNets", """
 resources
 | where type == "microsoft.network/virtualnetworks"
 | extend addressSpace = tostring(properties.addressSpace.addressPrefixes),
          subnets = array_length(properties.subnets),
          ddosProtection = properties.enableDdosProtection
 | project name, resourceGroup, subscriptionId, location, addressSpace, subnets, ddosProtection, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "NSGs" -Query '
+    q("NSGs", """
 resources
 | where type == "microsoft.network/networksecuritygroups"
 | extend rules = array_length(properties.securityRules),
          associatedSubnets = array_length(properties.subnets),
          associatedNICs = array_length(properties.networkInterfaces)
 | project name, resourceGroup, subscriptionId, location, rules, associatedSubnets, associatedNICs, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "LoadBalancers" -Query '
+    q("LoadBalancers", """
 resources
 | where type in ("microsoft.network/loadbalancers",
                  "microsoft.network/applicationgateways",
@@ -140,26 +108,26 @@ resources
                  "microsoft.cdn/profiles")
 | extend skuName = sku.name, skuTier = sku.tier
 | project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-Run-Query -Sheet "Firewalls" -Query '
+    q("Firewalls", """
 resources
 | where type in ("microsoft.network/azurefirewalls",
                  "microsoft.network/firewallpolicies",
                  "microsoft.network/applicationgatewaywebapplicationfirewallpolicies")
 | extend skuName = sku.name, skuTier = sku.tier, threatIntel = properties.threatIntelMode
 | project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, threatIntel, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-Run-Query -Sheet "PrivateEndpoints" -Query '
+    q("PrivateEndpoints", """
 resources
 | where type == "microsoft.network/privateendpoints"
 | extend target = tostring(properties.privateLinkServiceConnections[0].properties.privateLinkServiceId),
          status = properties.privateLinkServiceConnections[0].properties.privateLinkServiceConnectionState.status
 | project name, resourceGroup, subscriptionId, location, target, status, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "PublicIPs" -Query '
+    q("PublicIPs", """
 resources
 | where type == "microsoft.network/publicipaddresses"
 | extend ip = properties.ipAddress,
@@ -167,16 +135,16 @@ resources
          skuName = sku.name,
          associatedTo = coalesce(tostring(properties.ipConfiguration.id), "Unassociated")
 | project name, resourceGroup, subscriptionId, location, ip, allocation, skuName, associatedTo, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "DNS" -Query '
+    q("DNS", """
 resources
 | where type in ("microsoft.network/dnszones", "microsoft.network/privatednszones")
 | extend recordSets = properties.numberOfRecordSets
 | project name, type, resourceGroup, subscriptionId, location, recordSets, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-Run-Query -Sheet "Storage" -Query '
+    q("Storage", """
 resources
 | where type == "microsoft.storage/storageaccounts"
 | extend skuName = sku.name, kind_=kind,
@@ -185,9 +153,9 @@ resources
          networkAccess = properties.networkAcls.defaultAction,
          publicBlob = properties.allowBlobPublicAccess
 | project name, resourceGroup, subscriptionId, location, skuName, kind_, httpsOnly, tlsVersion, networkAccess, publicBlob, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "Databases" -Query '
+    q("Databases", """
 resources
 | where type in ("microsoft.sql/servers",
                  "microsoft.sql/servers/databases",
@@ -197,9 +165,9 @@ resources
                  "microsoft.cache/redis")
 | extend skuName=sku.name, skuTier=sku.tier, skuCapacity=sku.capacity
 | project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, skuCapacity, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-$keyVaultList = Run-Query -Sheet "KeyVaults" -Query '
+    key_vaults = q("KeyVaults", """
 resources
 | where type == "microsoft.keyvault/vaults"
 | extend sku_=properties.sku.name,
@@ -208,59 +176,55 @@ resources
          rbac=properties.enableRbacAuthorization,
          networkAccess=properties.networkAcls.defaultAction
 | project name, resourceGroup, subscriptionId, location, sku_, softDelete, purgeProtection, rbac, networkAccess, tags
-| order by name asc'
+| order by name asc""")
 
-# ─── Key Vault secret/certificate expiration (data-plane, needs Key Vault Get permission per vault) ──
-Write-Host "Checking Key Vault secret/certificate expiration..." -ForegroundColor Green
-$kvExpirationRows = @()
-if ($keyVaultList -and -not ($keyVaultList.Count -eq 1 -and $keyVaultList[0].PSObject.Properties.Name -contains "Result")) {
-    if (-not (Get-Module -ListAvailable -Name Az.KeyVault)) {
-        Install-Module Az.KeyVault -Scope CurrentUser -Force
-    }
-    Import-Module Az.KeyVault
-    $now = Get-Date
-    foreach ($vault in $keyVaultList) {
-        try {
-            $secrets = Get-AzKeyVaultSecret -VaultName $vault.name -ErrorAction Stop
-            foreach ($s in $secrets) {
-                $days = if ($s.Expires) { [math]::Round(($s.Expires - $now).TotalDays) } else { $null }
-                $kvExpirationRows += [PSCustomObject]@{
-                    VaultName = $vault.name; ItemType = "Secret"; ItemName = $s.Name
-                    Enabled = $s.Enabled; ExpiresOn = $s.Expires; DaysUntilExpiry = $days
-                    ResourceGroup = $vault.resourceGroup; SubscriptionId = $vault.subscriptionId
-                }
-            }
-        } catch {
-            Write-Host "  ! Could not read secrets for vault $($vault.name): $($_.Exception.Message)" -ForegroundColor DarkYellow
+    print("Checking Key Vault secret/certificate expiration...")
+    kv_rows = []
+    now = datetime.now(timezone.utc)
+    for vault in key_vaults:
+        vault_name = vault.get("name")
+        vault_uri = f"https://{vault_name}.vault.azure.net"
+        common_fields = {
+            "ResourceGroup": vault.get("resourceGroup"),
+            "SubscriptionId": vault.get("subscriptionId"),
         }
-        try {
-            $certs = Get-AzKeyVaultCertificate -VaultName $vault.name -ErrorAction Stop
-            foreach ($c in $certs) {
-                $days = if ($c.Expires) { [math]::Round(($c.Expires - $now).TotalDays) } else { $null }
-                $kvExpirationRows += [PSCustomObject]@{
-                    VaultName = $vault.name; ItemType = "Certificate"; ItemName = $c.Name
-                    Enabled = $c.Enabled; ExpiresOn = $c.Expires; DaysUntilExpiry = $days
-                    ResourceGroup = $vault.resourceGroup; SubscriptionId = $vault.subscriptionId
-                }
-            }
-        } catch {
-            Write-Host "  ! Could not read certificates for vault $($vault.name): $($_.Exception.Message)" -ForegroundColor DarkYellow
-        }
-    }
-}
-if ($kvExpirationRows.Count -eq 0) {
-    $kvExpirationRows = @([PSCustomObject]@{ Result = "No Key Vault secrets/certificates found (or permission unavailable - requires Key Vault Get permission on each vault)" })
-}
-$kvExpirationRows | Export-Excel -Path $outputFile -WorksheetName "KeyVaultExpirations" -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
-Write-Host "  [KeyVaultExpirations] $($kvExpirationRows.Count) rows" -ForegroundColor Gray
+        try:
+            secret_client = SecretClient(vault_url=vault_uri, credential=credential)
+            for secret in secret_client.list_properties_of_secrets():
+                days = round((secret.expires_on - now).total_seconds() / 86400) if secret.expires_on else None
+                kv_rows.append({
+                    "VaultName": vault_name, "ItemType": "Secret", "ItemName": secret.name,
+                    "Enabled": secret.enabled, "ExpiresOn": secret.expires_on, "DaysUntilExpiry": days,
+                    **common_fields,
+                })
+        except (HttpResponseError, Exception) as exc:  # missing permission or network issue shouldn't stop the run
+            print(f"  ! Could not read secrets for vault {vault_name}: {exc}")
+        try:
+            cert_client = CertificateClient(vault_url=vault_uri, credential=credential)
+            for cert in cert_client.list_properties_of_certificates():
+                days = round((cert.expires_on - now).total_seconds() / 86400) if cert.expires_on else None
+                kv_rows.append({
+                    "VaultName": vault_name, "ItemType": "Certificate", "ItemName": cert.name,
+                    "Enabled": cert.enabled, "ExpiresOn": cert.expires_on, "DaysUntilExpiry": days,
+                    **common_fields,
+                })
+        except (HttpResponseError, Exception) as exc:
+            print(f"  ! Could not read certificates for vault {vault_name}: {exc}")
 
-Run-Query -Sheet "ManagedIdentities" -Query '
+    count = add_sheet(
+        wb, "KeyVaultExpirations", kv_rows,
+        empty_message="No Key Vault secrets/certificates found (or permission unavailable - "
+                       "requires Key Vault Get permission on each vault)",
+    )
+    print(f"  [KeyVaultExpirations] {count} rows")
+
+    q("ManagedIdentities", """
 resources
 | where type == "microsoft.managedidentity/userassignedidentities"
 | project name, resourceGroup, subscriptionId, location, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "Monitoring" -Query '
+    q("Monitoring", """
 resources
 | where type in ("microsoft.insights/components",
                  "microsoft.operationalinsights/workspaces",
@@ -269,9 +233,9 @@ resources
                  "microsoft.insights/actiongroups")
 | extend skuName=sku.name, retention=properties.retentionInDays
 | project name, type, resourceGroup, subscriptionId, location, skuName, retention, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-Run-Query -Sheet "PolicyAssignments" -Query '
+    q("PolicyAssignments", """
 policyresources
 | where type == "microsoft.authorization/policyassignments"
 | extend displayName=tostring(properties.displayName),
@@ -279,16 +243,16 @@ policyresources
          definition=tostring(properties.policyDefinitionId),
          scope_=tostring(properties.scope)
 | project name, displayName, enforcement, definition, scope_, subscriptionId
-| order by displayName asc'
+| order by displayName asc""")
 
-Run-Query -Sheet "BackupVaults" -Query '
+    q("BackupVaults", """
 resources
 | where type in ("microsoft.recoveryservices/vaults", "microsoft.dataprotection/backupvaults")
 | extend skuName=sku.name, redundancy=properties.storageSettings[0].type
 | project name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
-| order by type asc, name asc'
+| order by type asc, name asc""")
 
-Run-Query -Sheet "BackupProtectedItems" -Query '
+    q("BackupProtectedItems", """
 resources
 | where type == "microsoft.recoveryservices/vaults/backupfabrics/protectioncontainers/protecteditems"
 | extend friendlyName=tostring(properties.friendlyName),
@@ -299,9 +263,9 @@ resources
          protectedItemType=tostring(properties.protectedItemType),
          workloadType=tostring(properties.workloadType)
 | project friendlyName, protectionStatus, lastBackupStatus, lastBackupTime, policyName, protectedItemType, workloadType, resourceGroup, subscriptionId
-| order by protectionStatus asc'
+| order by protectionStatus asc""")
 
-Run-Query -Sheet "ResourceHealthEvents" -Query '
+    q("ResourceHealthEvents", """
 resources
 | where type == "microsoft.resourcehealth/events"
 | extend eventType=tostring(properties.eventType),
@@ -312,25 +276,25 @@ resources
          impactStartTime=tostring(properties.impactStartTime),
          impactMitigationTime=tostring(properties.impactMitigationTime)
 | project title_, eventType, status, level, impactStartTime, impactMitigationTime, summary, subscriptionId
-| order by impactStartTime desc'
+| order by impactStartTime desc""")
 
-Run-Query -Sheet "UnattachedDisks" -Query '
+    q("UnattachedDisks", """
 resources
 | where type == "microsoft.compute/disks"
 | where isnull(managedBy) or managedBy == ""
 | extend diskSizeGB=toint(properties.diskSizeGB), skuName=tostring(sku.name), diskState=tostring(properties.diskState)
 | project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
-| order by diskSizeGB desc'
+| order by diskSizeGB desc""")
 
-Run-Query -Sheet "DeallocatedVMs" -Query '
+    q("DeallocatedVMs", """
 resources
 | where type == "microsoft.compute/virtualmachines"
 | where properties.extended.instanceView.powerState.displayStatus == "VM deallocated"
 | extend vmSize = properties.hardwareProfile.vmSize
 | project name, resourceGroup, subscriptionId, location, vmSize, tags
-| order by name asc'
+| order by name asc""")
 
-Run-Query -Sheet "AdvisorRecommendations" -Query '
+    q("AdvisorRecommendations", """
 advisorresources
 | where type == "microsoft.advisor/recommendations"
 | extend category=tostring(properties.category),
@@ -339,9 +303,13 @@ advisorresources
          impactedValue=tostring(properties.impactedValue),
          description=tostring(properties.shortDescription.solution)
 | project category, impact, impactedField, impactedValue, description, subscriptionId
-| order by category asc, impact desc'
+| order by category asc, impact desc""")
 
-# ─── Done ────────────────────────────────────────────────────────────────────
-Write-Host "`n✅ Discovery complete!" -ForegroundColor Green
-Write-Host "📁 File: $outputFile" -ForegroundColor Cyan
-Write-Host "💡 In Cloud Shell, click the upload/download icon to download the file.`n" -ForegroundColor Yellow
+    save(wb, output_path)
+    print("\nDiscovery complete!")
+    print(f"File: {output_path}\n")
+    return output_path
+
+
+if __name__ == "__main__":
+    run()

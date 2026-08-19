@@ -17,6 +17,11 @@
 
 $_outDir = if ($env:AZWORKSHOP_OUTPUT) { $env:AZWORKSHOP_OUTPUT } else { $HOME }
 $outputFile = Join-Path $_outDir "AzureFinOps_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
+if ($subscriptionIds.Count -eq 0) {
+    $subscriptionIds = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
+}
+if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
 
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force
@@ -46,7 +51,7 @@ function Invoke-GraphQuery {
     param([string]$Query, [string]$Sheet)
     $all = @(); $skip = $null
     do {
-        $p = @{ Query = $Query; First = 1000 }
+        $p = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
         if ($skip) { $p['SkipToken'] = $skip }
         $r = Invoke-SearchAzGraphWithRetry -Parameters $p
         $all += $r.Data
@@ -113,7 +118,7 @@ if ($headers) {
     } | ConvertTo-Json -Depth 10
 
     try {
-        $subs = Get-AzSubscription -ErrorAction Stop
+        $subs = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.Id -in $subscriptionIds })
         foreach ($sub in $subs) {
             $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
             try {
@@ -198,7 +203,7 @@ Write-Host "`nChecking configured budgets..." -ForegroundColor Cyan
 $budgetRows = @()
 if ($headers) {
     try {
-        $subs = Get-AzSubscription -ErrorAction Stop
+        $subs = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.Id -in $subscriptionIds })
         foreach ($sub in $subs) {
             $uri = "https://management.azure.com/subscriptions/$($sub.Id)/providers/Microsoft.Consumption/budgets?api-version=2023-05-01"
             try {

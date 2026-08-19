@@ -50,6 +50,12 @@ foreach ($moduleName in @('Az.Accounts', 'Az.ResourceGraph', 'ImportExcel')) {
     Import-Module $moduleName -ErrorAction Stop
 }
 
+$subscriptionIds = @($env:AZWORKSHOP_SUBSCRIPTION_IDS -split ',' | Where-Object { $_ })
+if ($subscriptionIds.Count -eq 0) {
+    $subscriptionIds = @(Get-AzSubscription -ErrorAction Stop | Where-Object { $_.State -eq 'Enabled' } | Select-Object -ExpandProperty Id)
+}
+if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
+
 function Add-SourceStatus {
     param(
         [string]$Source,
@@ -138,7 +144,7 @@ function Invoke-AzureResourceGraphQuery {
     $allRows = [System.Collections.Generic.List[object]]::new()
     $skipToken = $null
     do {
-        $parameters = @{ Query = $Query; First = 1000 }
+        $parameters = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
         if ($skipToken) { $parameters.SkipToken = $skipToken }
         $result = Invoke-SearchAzGraphWithRetry -Parameters $parameters
         foreach ($row in @($result.Data)) { $allRows.Add($row) }
