@@ -16,7 +16,7 @@ if errorlevel 1 (
 echo Starting the Azure WAF/CAF Workshop...
 echo.
 
-pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0Launch-AzureWorkshop.ps1" %*
+pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0powershell\Launch-AzureWorkshop.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.

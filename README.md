@@ -5,7 +5,7 @@ A comprehensive suite of PowerShell scripts + Python dashboard agent for **Azure
 **One launcher → seven assessment phases → one consolidated dashboard.**
 
 ```
-Launch-AzureWorkshop.ps1 → generate-dashboard.py → WAF_Dashboard.html
+powershell/Launch-AzureWorkshop.ps1 → generate-dashboard.py → WAF_Dashboard.html
 ```
 
 Point it at a tenant (single subscription or up to ~250), sign in with your own account, and it produces an interactive HTML dashboard scored against the five WAF pillars — no infrastructure to deploy, no Service Principal, no changes made to your environment (every query is read-only).
@@ -64,15 +64,15 @@ The launcher installs everything else for you the first time it runs — you don
 5. Watch the console — it prints `PHASE 1/7` through `PHASE 7/7` as it works. Leave the window open until it says the workshop completed successfully.
 6. The dashboard opens automatically in your browser. You can reopen it any time from `AzureWorkshop\07_Dashboard\WAF_Dashboard.html`.
 
-Need a faster first pass, or want to skip an optional phase? Double-clicking can't pass parameters — instead open a PowerShell 7 window in this folder and run it directly, e.g. `./Launch-AzureWorkshop.ps1 -SkipMetrics` (see [Parameters](#launch-azureworkshopps1) below for the full list of flags).
+Need a faster first pass, or want to skip an optional phase? Double-clicking can't pass parameters — instead open a PowerShell 7 window in this folder and run it directly, e.g. `./powershell/Launch-AzureWorkshop.ps1 -SkipMetrics` (see [Parameters](#launch-azureworkshopps1) below for the full list of flags).
 
 ### Option B — Azure Cloud Shell
 
 1. Go to [shell.azure.com](https://shell.azure.com) (or the Cloud Shell icon in the Azure Portal) and choose **PowerShell**.
-2. Upload every file in this folder (use the upload icon in the Cloud Shell toolbar), keeping the `checklists/` subfolder intact.
+2. Upload every file in this folder (use the upload icon in the Cloud Shell toolbar), keeping the `powershell/` and `checklists/` subfolders intact.
 3. Run the launcher:
    ```powershell
-   ./Launch-AzureWorkshop.ps1
+   ./powershell/Launch-AzureWorkshop.ps1
    ```
 4. Generate the dashboard once it finishes:
    ```powershell
@@ -170,23 +170,24 @@ The **Metrics phase is almost always the bottleneck** — it queries Azure Monit
 
 | File | Purpose |
 |---|---|
-| `Launch-AzureWorkshop.ps1` | Master launcher — calls all scripts sequentially |
-| `Invoke-AzureDiscovery-CloudShell.ps1` | Resource inventory via ARG (23 categories) |
-| `Invoke-AzureAdvisor-CloudShell.ps1` | Advisor recommendations by WAF pillar |
-| `Invoke-AzureFinOps-CloudShell.ps1` | Extended cost data: actual spend, budgets, reservation utilization, waste findings |
-| `Invoke-AzureMetrics-CloudShell.ps1` | Right-sizing via Azure Monitor metrics |
-| `Invoke-AzureGovernanceViz-CloudShell.ps1` | Governance HTML (AzGovViz-style) |
-| `Invoke-AzureSecurity-CloudShell.ps1` | Defender for Cloud CSPM/MCSB, Defender XDR, and Endpoint export |
-| `Invoke-AzureChecklists-CloudShell.ps1` | Community WAF checks from [Azure/review-checklists](https://github.com/Azure/review-checklists) (vendored locally, no network needed) via Resource Graph |
+| `powershell/Launch-AzureWorkshop.ps1` | Master launcher — calls all scripts sequentially |
+| `powershell/Invoke-AzureDiscovery-CloudShell.ps1` | Resource inventory via ARG (23 categories) |
+| `powershell/Invoke-AzureAdvisor-CloudShell.ps1` | Advisor recommendations by WAF pillar |
+| `powershell/Invoke-AzureFinOps-CloudShell.ps1` | Extended cost data: actual spend, budgets, reservation utilization, waste findings |
+| `powershell/Invoke-AzureMetrics-CloudShell.ps1` | Right-sizing via Azure Monitor metrics |
+| `powershell/Invoke-AzureGovernanceViz-CloudShell.ps1` | Governance HTML (AzGovViz-style) |
+| `powershell/Invoke-AzureSecurity-CloudShell.ps1` | Defender for Cloud CSPM/MCSB, Defender XDR, and Endpoint export |
+| `powershell/Invoke-AzureChecklists-CloudShell.ps1` | Community WAF checks from [Azure/review-checklists](https://github.com/Azure/review-checklists) (vendored locally, no network needed) via Resource Graph |
 | `generate-dashboard.py` | Consolidated dashboard with scoring + action items |
 
 See [How long does it take](#how-long-does-it-take) above for per-phase duration estimates.
 
 ## Output Structure
 
-By default, results land in an `AzureWorkshop` folder next to the scripts (pass `-OutputDir` to change this, or `-KeepPrevious` to archive rather than overwrite a prior run):
+By default, results land in an `AzureWorkshop` folder at the repository root (pass `-OutputDir` to change this, or `-KeepPrevious` to archive rather than overwrite a prior run). Both the PowerShell and Python launchers use this same location, so `AzureWorkshop.history.json` at the repository root tracks progress across runs from either launcher:
 
 ```
+AzureWorkshop.history.json                 # Shared score/action history for both launchers
 AzureWorkshop/
 ├── 01_Discovery/
 │   └── AzureDiscovery.xlsx          # 23 tabs: VMs, VNets, Storage, DBs, etc.
@@ -234,7 +235,7 @@ The Python agent produces a **WAF_Dashboard.html** with:
 
 | Parameter | Description |
 |---|---|
-| `-OutputDir` | Custom output directory. Default: `AzureWorkshop` next to the scripts |
+| `-OutputDir` | Custom output directory. Default: `AzureWorkshop` at the repository root |
 | `-SkipMetrics` | Skip the metrics phase (faster, but no right-sizing data) |
 | `-SkipFinOps` | Skip the extended cost export (actual cost, budgets, reservation utilization) |
 | `-KeepPrevious` | Archive the previous output folder (timestamp suffix) instead of deleting it |
@@ -245,17 +246,17 @@ The Python agent produces a **WAF_Dashboard.html** with:
 
 Each script can also be run standalone:
 ```powershell
-./Invoke-AzureDiscovery-CloudShell.ps1      # Runs independently
-./Invoke-AzureAdvisor-CloudShell.ps1        # Runs independently
-./Invoke-AzureMetrics-CloudShell.ps1        # Runs independently (slower)
-./Invoke-AzureGovernanceViz-CloudShell.ps1  # Runs independently
-./Invoke-AzureSecurity-CloudShell.ps1       # Runs independently; requests optional Graph scopes
-./Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
-./Invoke-AzureSecurity-CloudShell.ps1 -SkipGraphSecurity     # Keep Cloud + Endpoint; skip Graph sign-in
-./Invoke-AzureSecurity-CloudShell.ps1 -MaxEndpointRecords 10000
-./Invoke-AzureSecurity-CloudShell.ps1 -SkipDefenderPortal  # Defender for Cloud posture only
-./Invoke-AzureChecklists-CloudShell.ps1     # Runs independently; scans all community checklists
-./Invoke-AzureChecklists-CloudShell.ps1 -Services keyvault,aks,storage  # Scope to specific services
+./powershell/Invoke-AzureDiscovery-CloudShell.ps1      # Runs independently
+./powershell/Invoke-AzureAdvisor-CloudShell.ps1        # Runs independently
+./powershell/Invoke-AzureMetrics-CloudShell.ps1        # Runs independently (slower)
+./powershell/Invoke-AzureGovernanceViz-CloudShell.ps1  # Runs independently
+./powershell/Invoke-AzureSecurity-CloudShell.ps1       # Runs independently; requests optional Graph scopes
+./powershell/Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
+./powershell/Invoke-AzureSecurity-CloudShell.ps1 -SkipGraphSecurity     # Keep Cloud + Endpoint; skip Graph sign-in
+./powershell/Invoke-AzureSecurity-CloudShell.ps1 -MaxEndpointRecords 10000
+./powershell/Invoke-AzureSecurity-CloudShell.ps1 -SkipDefenderPortal  # Defender for Cloud posture only
+./powershell/Invoke-AzureChecklists-CloudShell.ps1     # Runs independently; scans all community checklists
+./powershell/Invoke-AzureChecklists-CloudShell.ps1 -Services keyvault,aks,storage  # Scope to specific services
 ```
 
 ### Security Data Sources
@@ -273,7 +274,7 @@ Check the `SourceStatus` worksheet before interpreting zero findings. `NoData` m
 `Invoke-AzureChecklists-CloudShell.ps1` runs each community check's embedded Azure Resource Graph query against the current subscription(s), using the checklist JSON files vendored locally under [`checklists/`](checklists/) — sourced from [Azure/review-checklists](https://github.com/Azure/review-checklists). This is **not an official Microsoft dataset**; it's an open-source, community-curated set of WAF checks per Azure service (Key Vault, AKS, Storage, etc.), each tagged with a Reliability/Security/Cost/Operations/Performance pillar.
 
 - No GitHub/network access is required at run time — only Azure Resource Graph, same as every other script in this toolkit. This keeps it safe to run from a locked-down Cloud Shell/launcher session.
-- Run `Update-ReviewChecklists.ps1` manually (from a machine with internet access) whenever you want to refresh `checklists/` with the latest upstream files, then commit the folder.
+- Run `./powershell/Update-ReviewChecklists.ps1` manually (from a machine with internet access) whenever you want to refresh `checklists/` with the latest upstream files, then commit the folder.
 - Findings only **add action items** to the dashboard (tagged with their source and a link back to the check's documentation) — they do **not** change the Advisor Score pillar math described below.
 - Use `-Services` to scope the scan to specific checklist files (e.g. `-Services keyvault,aks,storage`) if a full catalog scan is too slow.
 

@@ -21,8 +21,8 @@
     Maximum records exported from each Defender for Endpoint API dataset.
 
 .EXAMPLE
-    ./Invoke-AzureSecurity-CloudShell.ps1
-    ./Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
+    ./powershell/Invoke-AzureSecurity-CloudShell.ps1
+    ./powershell/Invoke-AzureSecurity-CloudShell.ps1 -LookbackDays 90
 #>
 
 [CmdletBinding()]

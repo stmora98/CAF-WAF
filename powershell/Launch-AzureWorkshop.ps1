@@ -12,11 +12,10 @@
     6. Invoke-AzureChecklists-CloudShell.ps1      (Azure/review-checklists ARG compliance)
     7. generate-dashboard.py                      (Consolidated dashboard + action items)
     
-    All outputs are consolidated into a single timestamped folder
-    created alongside the scripts.
+    All outputs are consolidated under AzureWorkshop at the repository root.
 
 .PARAMETER OutputDir
-    Base output directory. Defaults to "AzureWorkshop" alongside the scripts. If that
+    Base output directory. Defaults to "AzureWorkshop" at the repository root. If that
     folder already exists from a previous run, it is wiped and recreated (see -KeepPrevious).
 
 .PARAMETER SkipMetrics
@@ -31,9 +30,9 @@
     deleting it before the run.
 
 .EXAMPLE
-    ./Launch-AzureWorkshop.ps1
-    ./Launch-AzureWorkshop.ps1 -SkipMetrics
-    ./Launch-AzureWorkshop.ps1 -KeepPrevious
+    ./powershell/Launch-AzureWorkshop.ps1
+    ./powershell/Launch-AzureWorkshop.ps1 -SkipMetrics
+    ./powershell/Launch-AzureWorkshop.ps1 -KeepPrevious
 
 .NOTES
     Run in Azure Cloud Shell (PowerShell) or locally with Az modules installed.
@@ -59,9 +58,14 @@ param(
 $ErrorActionPreference = 'Continue'
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
+$repoRoot = if (Test-Path (Join-Path $scriptDir "generate-dashboard.py")) {
+    $scriptDir
+} else {
+    Split-Path $scriptDir -Parent
+}
 
 if (-not $OutputDir) {
-    $OutputDir = Join-Path $scriptDir "AzureWorkshop"
+    $OutputDir = Join-Path $repoRoot "AzureWorkshop"
 }
 if ($OutputDir -match '(?i)[\\/]OneDrive(?: - [^\\/]+)?[\\/]') {
     Write-Warning "OneDrive may automatically encrypt generated workbooks while they are being written. If dashboard inputs come back unreadable, pause OneDrive sync for this folder during the run or re-run with -OutputDir pointing outside OneDrive."
@@ -301,7 +305,7 @@ Invoke-PhaseWithValidation -Name "Checklists" -ScriptPath "$scriptDir/Invoke-Azu
 Write-Host "`n PHASE 7/7: Generating Consolidated Dashboard" -ForegroundColor Cyan
 if ($pythonCmd) {
     try {
-        & $pythonCmd @pythonArgs "$scriptDir/generate-dashboard.py" $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
+        & $pythonCmd @pythonArgs (Join-Path $repoRoot "generate-dashboard.py") $OutputDir *>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             throw "Dashboard generator exited with code $LASTEXITCODE"
         }

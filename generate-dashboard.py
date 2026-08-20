@@ -2160,8 +2160,11 @@ class DashboardGenerator:
             for c in node["children"]:
                 collect_sub_nodes(c, out)
 
-        def build_diagram(roots):
-            tree_roots = [{"kind": "mg", "data": r, "children": []} for r in roots]
+        def build_diagram(typed_roots):
+            # typed_roots are already {"kind": ..., "data": ...} dicts - either "mg" (real MG
+            # hierarchy) or "sub" (fallback when no MG read permission exists), so subscriptions
+            # can still anchor the tree/resource explorer even without a Management Group scope.
+            tree_roots = [{"kind": r["kind"], "data": r["data"], "children": []} for r in typed_roots]
             for root in tree_roots:
                 root["children"] = diagram_children(root)
             if not tree_roots:
@@ -2339,7 +2342,13 @@ class DashboardGenerator:
             return "".join(items)
 
         if has_hierarchy:
-            roots = [m for m in mg_rows if mg_level(m) == 0]
+            roots = [{"kind": "mg", "data": m, "children": []} for m in mg_rows if mg_level(m) == 0]
+            hierarchy_html, sub_nodes_for_explorer = build_diagram(roots)
+        elif subs_rows:
+            # No usable Management Group hierarchy (commonly: only subscription-scoped Reader
+            # access, no MG read permission) - anchor the tree on each subscription directly so
+            # the map and resource explorer still populate from real Sub/RG/resource data.
+            roots = [{"kind": "sub", "data": s, "children": []} for s in subs_rows]
             hierarchy_html, sub_nodes_for_explorer = build_diagram(roots)
         else:
             hierarchy_html, sub_nodes_for_explorer = "", []

@@ -27,7 +27,12 @@ if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
 }
 Import-Module ImportExcel
 
-$checklistsDir = Join-Path $PSScriptRoot "checklists"
+$repoRoot = if (Test-Path (Join-Path $PSScriptRoot "checklists")) {
+    $PSScriptRoot
+} else {
+    Split-Path $PSScriptRoot -Parent
+}
+$checklistsDir = Join-Path $repoRoot "checklists"
 
 # Checklist "waf" values (Reliability/Security/Cost/Operations/Performance) don't match
 # this toolkit's pillar names 1:1, so translate them here.

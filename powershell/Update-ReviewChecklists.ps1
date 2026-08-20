@@ -7,8 +7,17 @@
 #>
 
 param(
-    [string]$DestinationFolder = (Join-Path $PSScriptRoot "checklists")
+  [string]$DestinationFolder
 )
+
+$repoRoot = if (Test-Path (Join-Path $PSScriptRoot "checklists")) {
+  $PSScriptRoot
+} else {
+  Split-Path $PSScriptRoot -Parent
+}
+if (-not $DestinationFolder) {
+  $DestinationFolder = Join-Path $repoRoot "checklists"
+}
 
 $repoApi = "https://api.github.com/repos/Azure/review-checklists/contents/checklists"
 $webHeaders = @{ 'User-Agent' = 'AzureWafWorkshop' }
