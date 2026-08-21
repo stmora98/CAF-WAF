@@ -93,6 +93,54 @@ function Export-Sheet {
     $Data | Export-Excel -Path $excelFile -WorksheetName $Sheet -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
 }
 
+# Computes Level/Path/ChildMGs/ParentId from a flat {name,displayName,parent} MG list (the ARG
+# fallback shape) by walking each row's parent chain - the ARG query alone has no depth/path
+# info, and the dashboard's hierarchy diagram requires a real Level per row to render.
+function Resolve-MgLevels {
+    param([object[]]$FlatMgs)
+    if (-not $FlatMgs -or $FlatMgs.Count -eq 0) { return @() }
+    $byId = @{}
+    foreach ($m in $FlatMgs) { $byId[$m.name] = $m }
+    $childCounts = @{}
+    foreach ($m in $FlatMgs) {
+        $parentId = if ($m.parent) { ($m.parent -split '/')[-1] } else { $null }
+        if ($parentId -and $byId.ContainsKey($parentId)) {
+            if (-not $childCounts.ContainsKey($parentId)) { $childCounts[$parentId] = 0 }
+            $childCounts[$parentId]++
+        }
+    }
+    $levelCache = @{}
+    $pathCache = @{}
+    function Resolve-MgNode {
+        param([string]$Id, [int]$Guard = 0)
+        if ($levelCache.ContainsKey($Id)) { return }
+        $node = $byId[$Id]
+        $parentId = if ($node.parent) { ($node.parent -split '/')[-1] } else { $null }
+        if (-not $parentId -or -not $byId.ContainsKey($parentId) -or $Guard -gt 20) {
+            $levelCache[$Id] = 0
+            $pathCache[$Id] = $node.displayName
+            return
+        }
+        Resolve-MgNode -Id $parentId -Guard ($Guard + 1)
+        $levelCache[$Id] = $levelCache[$parentId] + 1
+        $pathCache[$Id] = "$($pathCache[$parentId])/$($node.displayName)"
+    }
+    foreach ($m in $FlatMgs) { Resolve-MgNode -Id $m.name }
+    return $FlatMgs | ForEach-Object {
+        $parentId = if ($_.parent) { ($_.parent -split '/')[-1] } else { "" }
+        [PSCustomObject]@{
+            Level         = $levelCache[$_.name]
+            DisplayName   = $_.displayName
+            Id            = $_.name
+            Path          = $pathCache[$_.name]
+            ChildMGs      = if ($childCounts.ContainsKey($_.name)) { $childCounts[$_.name] } else { 0 }
+            Subscriptions = 0
+            SubNames      = ""
+            ParentId      = $parentId
+        }
+    }
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA COLLECTION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -148,13 +196,21 @@ function Get-MGHierarchy {
 try {
     Get-MGHierarchy -GroupName $tenantId
 } catch {
-    Write-Host "    Falling back to ARG for MG data..." -ForegroundColor DarkYellow
-    $mgData = Invoke-ARGQuery -Query '
+    Write-Host "    Root MG traversal threw an exception - falling back to ARG for MG data..." -ForegroundColor DarkYellow
+}
+if (-not $mgData -or $mgData.Count -eq 0) {
+    # Get-MGHierarchy swallows its own per-node errors (see its internal catch above), so a
+    # caller without Reader at the TENANT ROOT (but with Reader at a child MG) ends up here
+    # with an empty $mgData instead of a thrown exception - always re-check emptiness, not
+    # just rely on the try/catch, or partial MG access silently renders as "no data".
+    Write-Host "    No management groups discovered from the tenant root (no access at that scope?) - falling back to ARG for MG data..." -ForegroundColor DarkYellow
+    $flatMgs = Invoke-ARGQuery -Query '
     resourcecontainers
     | where type == "microsoft.management/managementgroups"
     | extend displayName = tostring(properties.displayName),
              parent = tostring(properties.details.parent.id)
     | project name, displayName, parent'
+    $mgData = Resolve-MgLevels -FlatMgs $flatMgs
 }
 Export-Sheet -Data $mgData -Sheet "MgmtGroups"
 

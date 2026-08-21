@@ -14,8 +14,10 @@ from azure.mgmt.subscription import SubscriptionClient
 
 
 def get_credential() -> TokenCredential:
-    """Interactive browser sign-in - the Python equivalent of Connect-AzAccount."""
-    return InteractiveBrowserCredential()
+    """Interactive browser sign-in - the Python equivalent of Connect-AzAccount.
+    prompt="login" forces Azure AD to always show a fresh sign-in, never silently reusing
+    an existing browser SSO session (matches PowerShell's forced re-auth behavior)."""
+    return InteractiveBrowserCredential(prompt="login")
 
 
 def list_enabled_subscriptions(credential: TokenCredential) -> list:

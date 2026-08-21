@@ -44,6 +44,60 @@ def _flatten_management_groups(node, level: int = 0, parent_path: str = "", pare
     return rows
 
 
+def _levels_from_parent_chain(rows: list) -> list:
+    """Computes Level/Path/ChildMGs/ParentId from a flat {name,displayName,parent} MG list (the
+    ARG fallback shape, used when the caller lacks Reader at the tenant root but can still see a
+    child MG) by walking each row's parent chain - the ARG query alone has no depth/path info,
+    and the dashboard's hierarchy diagram requires a real Level per row to render.
+    """
+    if not rows:
+        return []
+    by_id = {r["name"]: r for r in rows}
+
+    def parent_of(row) -> str:
+        parent = row.get("parent") or ""
+        return parent.rstrip("/").rsplit("/", 1)[-1] if parent else ""
+
+    child_counts: dict = {}
+    for r in rows:
+        parent_id = parent_of(r)
+        if parent_id and parent_id in by_id:
+            child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
+
+    level_cache: dict = {}
+    path_cache: dict = {}
+
+    def resolve(node_id: str, guard: int = 0):
+        if node_id in level_cache:
+            return
+        node = by_id[node_id]
+        parent_id = parent_of(node)
+        if not parent_id or parent_id not in by_id or guard > 20:
+            level_cache[node_id] = 0
+            path_cache[node_id] = node.get("displayName", node_id)
+            return
+        resolve(parent_id, guard + 1)
+        level_cache[node_id] = level_cache[parent_id] + 1
+        path_cache[node_id] = f"{path_cache[parent_id]}/{node.get('displayName', node_id)}"
+
+    for r in rows:
+        resolve(r["name"])
+
+    return [
+        {
+            "Level": level_cache[r["name"]],
+            "DisplayName": r.get("displayName", r["name"]),
+            "Id": r["name"],
+            "Path": path_cache[r["name"]],
+            "ChildMGs": child_counts.get(r["name"], 0),
+            "Subscriptions": 0,
+            "SubNames": "",
+            "ParentId": parent_of(r),
+        }
+        for r in rows
+    ]
+
+
 def run(credential=None, subscription_ids=None) -> str:
     credential = credential or get_credential()
     subscription_ids = subscription_ids or resolve_subscription_ids(credential)
@@ -71,12 +125,13 @@ def run(credential=None, subscription_ids=None) -> str:
         mg_rows = _flatten_management_groups(root)
     except Exception as exc:
         print(f"    Falling back to ARG for MG data ({exc})...")
-        mg_rows = run_query(credential, subscription_ids, """
+        flat_mgs = run_query(credential, subscription_ids, """
 resourcecontainers
 | where type == "microsoft.management/managementgroups"
 | extend displayName = tostring(properties.displayName),
          parent = tostring(properties.details.parent.id)
 | project name, displayName, parent""")
+        mg_rows = _levels_from_parent_chain(flat_mgs)
     export("MgmtGroups", mg_rows)
 
     # ─── Subscriptions ────────────────────────────────────────────────────
