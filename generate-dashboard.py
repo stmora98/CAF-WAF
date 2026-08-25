@@ -3112,14 +3112,10 @@ class DashboardGenerator:
 
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o', 'Oportunidades de ajuste de tamanho')}{it('Advisor recommendations to resize or shut down underutilized compute and database resources.', 'Recomendaciones de Advisor para redimensionar o apagar recursos de c\u00f3mputo y bases de datos subutilizados.', 'Recomenda\u00e7\u00f5es do Advisor para redimensionar ou desligar recursos de computa\u00e7\u00e3o e banco de dados subutilizados.')}</div>
-            <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales', 'M\u00e1quinas Virtuais')}</h3>{render_distribution(vm_rightsizing)}{vm_table}</div>
-                <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL', 'Bancos de Dados SQL')}</h3>{render_distribution(sql_rightsizing)}{sql_table}</div>
-            </div>
-            <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('App Service Plans', 'Planes de App Service', 'Planos do App Service')}</h3>{render_distribution(plan_rightsizing)}{plan_table}</div>
-                <div class="security-panel"><h3>{bi('Storage Accounts', 'Cuentas de Almacenamiento', 'Contas de Armazenamento')}</h3>{render_distribution(storage_activity)}{storage_table}</div>
-            </div>
+            <div class="security-panel" style="margin-bottom: 18px;"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales', 'M\u00e1quinas Virtuais')}</h3>{render_distribution(vm_rightsizing)}{vm_table}</div>
+            <div class="security-panel" style="margin-bottom: 18px;"><h3>{bi('SQL Databases', 'Bases de Datos SQL', 'Bancos de Dados SQL')}</h3>{render_distribution(sql_rightsizing)}{sql_table}</div>
+            <div class="security-panel" style="margin-bottom: 18px;"><h3>{bi('App Service Plans', 'Planes de App Service', 'Planos do App Service')}</h3>{render_distribution(plan_rightsizing)}{plan_table}</div>
+            <div class="security-panel"><h3>{bi('Storage Accounts', 'Cuentas de Almacenamiento', 'Contas de Armazenamento')}</h3>{render_distribution(storage_activity)}{storage_table}</div>
         </div>
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Idle and orphaned resources', 'Recursos inactivos y hu\u00e9rfanos', 'Recursos ociosos e \u00f3rf\u00e3os')}{it('Resources with no active workload (unattached disks, unused public IPs, stopped-but-billed VMs) that are safe cleanup candidates.', 'Recursos sin carga de trabajo activa (discos sin adjuntar, IPs p\u00fablicas sin uso, VMs detenidas pero facturadas) candidatos seguros para limpieza.', 'Recursos sem carga de trabalho ativa (discos n\u00e3o anexados, IPs p\u00fablicos n\u00e3o utilizados, VMs paradas mas cobradas) candidatos seguros para limpeza.')}</div>
