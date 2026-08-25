@@ -15,6 +15,16 @@ if ($subscriptionIds.Count -eq 0) {
 }
 if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
 
+# subscriptionId alone (a GUID) isn't useful in a dashboard filter dropdown - resolve it to
+# the friendly display name wherever a row carries one.
+$subNameMap = @{}
+foreach ($s in (Get-AzSubscription -ErrorAction SilentlyContinue)) { $subNameMap[$s.Id] = $s.Name }
+function Resolve-SubName {
+    param([string]$Id)
+    if ($Id -and $subNameMap.ContainsKey($Id)) { return $subNameMap[$Id] }
+    return $Id
+}
+
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force
 }
@@ -106,6 +116,55 @@ function Get-MaxMetric {
     } while ($true)
 }
 
+# ─── Azure Retail Prices API - best-effort cost/target-SKU estimate for right-sizing ────
+# Public, unauthenticated. Retail (list) pricing only - no reservations/Hybrid Benefit/
+# negotiated discounts applied, so treat the numbers as estimates, not an invoice.
+$_priceCache = @{}
+$_HoursPerMonth = 730
+$_AppServiceSkuFamilies = @(
+    @("B1", "B2", "B3")
+    @("S1", "S2", "S3")
+    @("P1V2", "P2V2", "P3V2")
+    @("P0V3", "P1V3", "P2V3", "P3V3")
+    @("P0MV3", "P1MV3", "P2MV3", "P3MV3")
+    @("I1V2", "I2V2", "I3V2")
+    @("I1MV2", "I2MV2", "I3MV2")
+)
+
+function Get-SmallerAppServiceSku {
+    param([string]$SkuName)
+    if (-not $SkuName) { return $null }
+    $normalized = $SkuName.Trim().ToUpperInvariant()
+    foreach ($family in $_AppServiceSkuFamilies) {
+        $idx = [array]::IndexOf($family, $normalized)
+        if ($idx -ge 0) { return $(if ($idx -gt 0) { $family[$idx - 1] } else { $null }) }
+    }
+    return $null
+}
+
+function Get-AppServicePlanMonthlyCost {
+    param([string]$SkuName, [string]$Region, [int]$Workers = 1)
+    if (-not $SkuName -or -not $Region) { return $null }
+    $key = "$($SkuName.Trim().ToUpperInvariant())|$($Region.Trim().ToLowerInvariant())"
+    if (-not $_priceCache.ContainsKey($key)) {
+        $filt = "serviceName eq 'Azure App Service' and armRegionName eq '$($Region.Trim().ToLowerInvariant())' and armSkuName eq '$($SkuName.Trim().ToUpperInvariant())' and priceType eq 'Consumption'"
+        try {
+            $resp = Invoke-RestMethod -Uri "https://prices.azure.com/api/retail/prices" -Body @{ '$filter' = $filt } -Method Get -TimeoutSec 20
+            $prices = @($resp.Items | Where-Object { $null -ne $_.retailPrice } | Select-Object -ExpandProperty retailPrice)
+            $currency = if ($resp.Items.Count -gt 0) { $resp.Items[0].currencyCode } else { $null }
+            $_priceCache[$key] = [PSCustomObject]@{ Hourly = $(if ($prices.Count -gt 0) { ($prices | Measure-Object -Minimum).Minimum } else { $null }); Currency = $currency }
+        } catch {
+            $_priceCache[$key] = [PSCustomObject]@{ Hourly = $null; Currency = $null }
+        }
+    }
+    $cached = $_priceCache[$key]
+    if ($null -eq $cached.Hourly) { return $null }
+    return [PSCustomObject]@{
+        MonthlyCost = [math]::Round($cached.Hourly * $_HoursPerMonth * [math]::Max($Workers, 1), 2)
+        Currency    = $cached.Currency
+    }
+}
+
 Write-Host "`n=== Azure Metrics Discovery (Last $daysBack days) ===" -ForegroundColor Cyan
 Write-Host "Output: $outputFile`n" -ForegroundColor Yellow
 
@@ -138,7 +197,7 @@ foreach ($vm in $vms) {
     $vmMetrics += [PSCustomObject]@{
         Name          = $vm.name
         ResourceGroup = $vm.resourceGroup
-        Subscription  = $vm.subscriptionId
+        Subscription  = Resolve-SubName $vm.subscriptionId
         Location      = $vm.location
         VMSize        = $vm.vmSize
         AvgCPU_Pct    = $cpuAvg
@@ -182,7 +241,7 @@ foreach ($db in $sqlDbs) {
     $sqlMetrics += [PSCustomObject]@{
         Name          = $db.name
         ResourceGroup = $db.resourceGroup
-        Subscription  = $db.subscriptionId
+        Subscription  = Resolve-SubName $db.subscriptionId
         SKU           = $db.skuName
         Tier          = $db.skuTier
         MetricType    = $metricType
@@ -220,16 +279,34 @@ foreach ($plan in $plans) {
               elseif ($cpuAvg -lt 80) { "Right-sized" }
               else                    { "Saturated (>80%)" }
 
+    $targetSku = $null
+    $currentCost = $null; $targetCost = $null; $costCurrency = $null
+    if ($sizing -eq "Idle (<5%)" -or $sizing -eq "Underutilized (<20%)") {
+        $targetSku = Get-SmallerAppServiceSku -SkuName $plan.skuName
+        $currentPricing = Get-AppServicePlanMonthlyCost -SkuName $plan.skuName -Region $plan.location -Workers $plan.workers
+        if ($currentPricing) { $currentCost = $currentPricing.MonthlyCost; $costCurrency = $currentPricing.Currency }
+        if ($targetSku) {
+            $targetPricing = Get-AppServicePlanMonthlyCost -SkuName $targetSku -Region $plan.location -Workers $plan.workers
+            if ($targetPricing) { $targetCost = $targetPricing.MonthlyCost }
+        }
+    }
+    $monthlySavings = if ($null -ne $currentCost -and $null -ne $targetCost) { [math]::Round($currentCost - $targetCost, 2) } else { $null }
+
     $planMetrics += [PSCustomObject]@{
-        Name          = $plan.name
-        ResourceGroup = $plan.resourceGroup
-        Subscription  = $plan.subscriptionId
-        SKU           = $plan.skuName
-        Tier          = $plan.skuTier
-        Workers       = $plan.workers
-        AvgCPU_Pct    = $cpuAvg
-        AvgMemory_Pct = $memAvg
-        Assessment    = $sizing
+        Name                 = $plan.name
+        ResourceGroup        = $plan.resourceGroup
+        Subscription         = Resolve-SubName $plan.subscriptionId
+        SKU                  = $plan.skuName
+        Tier                 = $plan.skuTier
+        Workers              = $plan.workers
+        AvgCPU_Pct           = $cpuAvg
+        AvgMemory_Pct        = $memAvg
+        Assessment           = $sizing
+        TargetSKU            = $targetSku
+        CurrentMonthlyCost   = $currentCost
+        EstMonthlySavings    = $monthlySavings
+        EstAnnualSavings     = $(if ($null -ne $monthlySavings) { [math]::Round($monthlySavings * 12, 2) } else { $null })
+        Currency             = $costCurrency
     }
 }
 Write-Progress -Activity "Querying App Plan metrics" -Completed
@@ -261,7 +338,7 @@ foreach ($sa in $storageAccounts) {
     $storageMetrics += [PSCustomObject]@{
         Name             = $sa.name
         ResourceGroup    = $sa.resourceGroup
-        Subscription     = $sa.subscriptionId
+        Subscription     = Resolve-SubName $sa.subscriptionId
         SKU              = $sa.skuName
         AvgDailyTxns     = $transactions
         Availability_Pct = $availability
@@ -324,7 +401,7 @@ foreach ($res in $diagCoverage) {
         Name           = $res.name
         Type           = $res.type
         ResourceGroup  = $res.resourceGroup
-        Subscription   = $res.subscriptionId
+        Subscription   = Resolve-SubName $res.subscriptionId
         HasDiagnostics = $hasDiag
         Destinations   = $destinations
         Gap            = if (-not $hasDiag) { "No diagnostics configured" } else { "OK" }

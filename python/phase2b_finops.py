@@ -11,7 +11,7 @@ bootstrap.ensure_dependencies()
 from datetime import datetime, timedelta
 
 from common.argquery import run_query
-from common.auth import get_credential, list_enabled_subscriptions, resolve_subscription_ids
+from common.auth import get_credential, list_enabled_subscriptions, resolve_subscription_ids, subscription_name_map
 from common.excelio import add_sheet, make_output_path, new_workbook, save
 from common.httpretry import get_bearer_token, request_with_retry
 
@@ -19,6 +19,7 @@ from common.httpretry import get_bearer_token, request_with_retry
 def run(credential=None, subscription_ids=None) -> str:
     credential = credential or get_credential()
     subscription_ids = subscription_ids or resolve_subscription_ids(credential)
+    sub_names = subscription_name_map(credential)
     output_path = make_output_path("AzureFinOps")
     wb = new_workbook()
 
@@ -26,6 +27,9 @@ def run(credential=None, subscription_ids=None) -> str:
 
     def q(sheet: str, query: str):
         rows = run_query(credential, subscription_ids, query)
+        for row in rows:
+            if "subscriptionId" in row:
+                row["Subscription"] = sub_names.get(row["subscriptionId"], row["subscriptionId"])
         count = add_sheet(wb, sheet, rows, empty_message="No findings")
         print(f"  [{sheet}] {count} rows")
         return rows

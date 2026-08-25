@@ -27,6 +27,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Force UTF-8 for stdout/stderr - without this, on Windows consoles whose active codepage
+# isn't UTF-8, the emoji/box-drawing characters used below get misdecoded into garbled
+# sequences (e.g. "ΓòÉΓòÉΓòÉ" instead of "═══"). Also propagate PYTHONUTF8/PYTHONIOENCODING so
+# the generate-dashboard.py subprocess spawned later inherits the same behavior.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+import os
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 import bootstrap
 bootstrap.ensure_dependencies()
 
@@ -350,6 +362,9 @@ def main() -> int:
     elapsed_minutes = (time.time() - start_time) / 60
     print("\nALL PHASES COMPLETE")
     print(f"Duration: {elapsed_minutes:.1f} minutes")
+    print(f"Subscriptions analyzed ({len(subs)}):")
+    for sub in subs:
+        print(f"  - {sub.display_name} ({sub.subscription_id})")
     print(f"Output:   {output_dir}")
     print("  01_Discovery/    - Resource inventory (Excel)")
     print("  02_Advisor/      - Advisor recommendations (Excel)")

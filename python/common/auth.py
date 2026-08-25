@@ -38,3 +38,10 @@ def resolve_subscription_ids(credential: TokenCredential) -> List[str]:
     if not subs:
         raise RuntimeError("No enabled subscriptions are accessible in the current tenant.")
     return [s.subscription_id for s in subs]
+
+
+def subscription_name_map(credential: TokenCredential) -> dict:
+    """Maps subscriptionId (GUID) -> display name, so raw ARG/REST rows (which only carry
+    the GUID) can show a human-readable subscription name in the dashboard instead - the
+    GUID alone isn't useful in a filter dropdown."""
+    return {s.subscription_id: s.display_name for s in list_enabled_subscriptions(credential)}

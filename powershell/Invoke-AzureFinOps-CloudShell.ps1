@@ -23,6 +23,16 @@ if ($subscriptionIds.Count -eq 0) {
 }
 if ($subscriptionIds.Count -eq 0) { throw "No enabled subscriptions are accessible in the current tenant." }
 
+# subscriptionId alone (a GUID) isn't useful in a dashboard filter dropdown - resolve it to
+# the friendly display name wherever a row carries one.
+$subNameMap = @{}
+foreach ($s in (Get-AzSubscription -ErrorAction SilentlyContinue)) { $subNameMap[$s.Id] = $s.Name }
+function Resolve-SubName {
+    param([string]$Id)
+    if ($Id -and $subNameMap.ContainsKey($Id)) { return $subNameMap[$Id] }
+    return $Id
+}
+
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     Install-Module ImportExcel -Scope CurrentUser -Force
 }
@@ -57,6 +67,11 @@ function Invoke-GraphQuery {
         $all += $r.Data
         $skip = $r.SkipToken
     } while ($skip)
+    foreach ($row in $all) {
+        if ($row.PSObject.Properties.Match('subscriptionId').Count -gt 0) {
+            $row | Add-Member -NotePropertyName Subscription -NotePropertyValue (Resolve-SubName $row.subscriptionId) -Force
+        }
+    }
     if ($all.Count -eq 0) { $all = @([PSCustomObject]@{ Result = "No findings" }) }
     $all | Export-Excel -Path $outputFile -WorksheetName $Sheet -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
     Write-Host "  [$Sheet] $($all.Count) rows" -ForegroundColor Gray

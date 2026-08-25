@@ -13,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 from azure.mgmt.monitor import MonitorManagementClient
 
 from common.argquery import run_query
-from common.auth import get_credential, resolve_subscription_ids
+from common.auth import get_credential, resolve_subscription_ids, subscription_name_map
 from common.excelio import add_sheet, make_output_path, new_workbook, save
+from common.pricing import get_app_service_plan_monthly_cost, suggest_smaller_app_service_sku
 
 DAYS_BACK = 30
 
@@ -59,6 +60,7 @@ def _avg_only(monitor_client: MonitorManagementClient, resource_id: str, metric_
 def run(credential=None, subscription_ids=None) -> str:
     credential = credential or get_credential()
     subscription_ids = subscription_ids or resolve_subscription_ids(credential)
+    sub_names = subscription_name_map(credential)
     output_path = make_output_path("AzureMetrics")
     wb = new_workbook()
 
@@ -102,7 +104,7 @@ resources
             sizing = "Saturated (>80%)"
         vm_rows.append({
             "Name": vm.get("name"), "ResourceGroup": vm.get("resourceGroup"),
-            "Subscription": vm.get("subscriptionId"), "Location": vm.get("location"),
+            "Subscription": sub_names.get(vm.get("subscriptionId"), vm.get("subscriptionId")), "Location": vm.get("location"),
             "VMSize": vm.get("vmSize"), "AvgCPU_Pct": cpu_avg, "MaxCPU_Pct": cpu_max,
             "Assessment": sizing,
         })
@@ -142,7 +144,7 @@ resources
 
         sql_rows.append({
             "Name": db.get("name"), "ResourceGroup": db.get("resourceGroup"),
-            "Subscription": db.get("subscriptionId"), "SKU": db.get("skuName"), "Tier": db.get("skuTier"),
+            "Subscription": sub_names.get(db.get("subscriptionId"), db.get("subscriptionId")), "SKU": db.get("skuName"), "Tier": db.get("skuTier"),
             "MetricType": metric_type, "AvgUsage_Pct": usage_metric, "Storage_Pct": storage_used,
             "Assessment": sizing,
         })
@@ -176,11 +178,28 @@ resources
         else:
             sizing = "Saturated (>80%)"
 
+        target_sku = None
+        current_cost = target_cost = None
+        cost_currency = None
+        if sizing in ("Idle (<5%)", "Underutilized (<20%)"):
+            target_sku = suggest_smaller_app_service_sku(plan.get("skuName"))
+            current_cost, cost_currency = get_app_service_plan_monthly_cost(
+                plan.get("skuName"), plan.get("location"), plan.get("workers"))
+            if target_sku:
+                target_cost, _ = get_app_service_plan_monthly_cost(
+                    target_sku, plan.get("location"), plan.get("workers"))
+        monthly_savings = (current_cost - target_cost) if (current_cost is not None and target_cost is not None) else None
+
         plan_rows.append({
             "Name": plan.get("name"), "ResourceGroup": plan.get("resourceGroup"),
-            "Subscription": plan.get("subscriptionId"), "SKU": plan.get("skuName"), "Tier": plan.get("skuTier"),
+            "Subscription": sub_names.get(plan.get("subscriptionId"), plan.get("subscriptionId")), "SKU": plan.get("skuName"), "Tier": plan.get("skuTier"),
             "Workers": plan.get("workers"), "AvgCPU_Pct": cpu_avg, "AvgMemory_Pct": mem_avg,
             "Assessment": sizing,
+            "TargetSKU": target_sku,
+            "CurrentMonthlyCost": round(current_cost, 2) if current_cost is not None else None,
+            "EstMonthlySavings": round(monthly_savings, 2) if monthly_savings is not None else None,
+            "EstAnnualSavings": round(monthly_savings * 12, 2) if monthly_savings is not None else None,
+            "Currency": cost_currency,
         })
     print()
     export("AppPlan_RightSizing", plan_rows)
@@ -210,7 +229,7 @@ resources
 
         storage_rows.append({
             "Name": sa.get("name"), "ResourceGroup": sa.get("resourceGroup"),
-            "Subscription": sa.get("subscriptionId"), "SKU": sa.get("skuName"),
+            "Subscription": sub_names.get(sa.get("subscriptionId"), sa.get("subscriptionId")), "SKU": sa.get("skuName"),
             "AvgDailyTxns": transactions, "Availability_Pct": availability, "Assessment": activity,
         })
     print()

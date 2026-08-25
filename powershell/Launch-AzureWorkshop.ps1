@@ -31,8 +31,9 @@
 
 .PARAMETER SubscriptionIds
     Comma-separated subscription GUIDs to scan, instead of every enabled subscription in
-    the tenant. If omitted in an interactive session, a numbered picker is shown (press
-    Enter to scan everything, the previous/default behavior).
+    the tenant. If omitted in an interactive session, a picker is shown; you must select
+    at least one subscription to continue - closing the picker or selecting nothing stops
+    the run.
 
 .EXAMPLE
     ./powershell/Launch-AzureWorkshop.ps1
@@ -64,6 +65,17 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# Force UTF-8 for both this console's own output (the emoji/box-drawing characters used by
+# Write-Host below) and the bytes decoded from the Python dashboard subprocess later - without
+# this, the console's default (often CP1252/OEM) codepage misdecodes UTF-8 into garbled
+# sequences like "ΓòÉΓòÉΓòÉ" instead of "═══" or "📊"/"✅".
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+try { chcp 65001 | Out-Null } catch { }
+# Ensures the Python subprocess (generate-dashboard.py) also always writes UTF-8, regardless
+# of how its stdout ends up being connected when it's spawned from here.
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
 $repoRoot = if (Test-Path (Join-Path $scriptDir "generate-dashboard.py")) {
@@ -215,72 +227,159 @@ if ($allEnabledSubscriptions.Count -eq 0) {
 # -SubscriptionIds skips the prompt entirely (scripted/unattended runs); otherwise a graphical
 # WinForms picker (checkboxes, live filter, selection counter) is tried first, falling back to
 # a text numbered picker if WinForms isn't available (e.g. Cloud Shell has no display/System.
-# Windows.Forms), both defaulting to ALL when nothing is picked.
+# Windows.Forms). Both require at least one subscription to be selected - the run stops if
+# none are chosen (closing/cancelling the picker, or an empty text response).
 function Show-SubscriptionPickerGui {
     param([object[]]$AllSubscriptions)
 
     # Throws on Cloud Shell/non-Windows (no System.Windows.Forms) - caller catches and falls
     # back to the text picker.
     Add-Type -AssemblyName System.Windows.Forms, System.Drawing -ErrorAction Stop
+    # Must run before the first WinForms control is created in the process; ignore if a
+    # previous call (or host) already applied it.
+    try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { }
 
     $checkedState = @{}
     foreach ($s in $AllSubscriptions) { $checkedState[$s.Id] = $false }
     $displayToId = @{}
 
+    $navy = [System.Drawing.Color]::FromArgb(6, 52, 102)
+    $accentBlue = [System.Drawing.Color]::FromArgb(15, 108, 189)
+    $infoBg = [System.Drawing.Color]::FromArgb(234, 243, 252)
+    $disabledGray = [System.Drawing.Color]::FromArgb(200, 200, 200)
+    $stopRed = [System.Drawing.Color]::FromArgb(196, 43, 28)
+    $borderGray = [System.Drawing.Color]::FromArgb(210, 210, 214)
+
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Azure WAF/CAF Workshop - Select Subscriptions"
-    # ClientSize (not Size) fixes the usable interior area precisely - Size also counts the
-    # title bar/borders, which previously left the bottom buttons cramped/clipped depending
-    # on Windows theme and DPI scaling.
-    $form.ClientSize = New-Object System.Drawing.Size(560, 520)
-    $form.MinimumSize = New-Object System.Drawing.Size(480, 460)
+    $form.ClientSize = New-Object System.Drawing.Size(700, 600)
+    $form.MinimumSize = New-Object System.Drawing.Size(620, 520)
     $form.StartPosition = "CenterScreen"
     $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $form.BackColor = [System.Drawing.Color]::White
+    $form.Padding = New-Object System.Windows.Forms.Padding(0)
+
+    # Everything below is Dock/Anchor-driven (a TableLayoutPanel skeleton with AutoSize rows
+    # for the header/info/filter/buttons and one Percent(100) row for the list) instead of
+    # hand-placed pixel coordinates - this keeps the layout correct even if the window ends
+    # up smaller than requested (small/remote screens, unusual DPI, etc.) instead of the
+    # previous fixed-coordinate design, which could overlap in those cases.
+    $root = New-Object System.Windows.Forms.TableLayoutPanel
+    $root.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $root.ColumnCount = 1
+    $root.RowCount = 5
+    [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$root.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    $form.Controls.Add($root)
+
+    # --- Row 0: navy header banner ---
+    $headerPanel = New-Object System.Windows.Forms.Panel
+    $headerPanel.BackColor = $navy
+    $headerPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $headerPanel.Padding = New-Object System.Windows.Forms.Padding(24, 16, 24, 16)
+    $headerPanel.AutoSize = $true
+    $headerPanel.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
 
     $header = New-Object System.Windows.Forms.Label
     $header.Text = "Select subscriptions to scan"
-    $header.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
+    $header.Font = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
+    $header.ForeColor = [System.Drawing.Color]::White
     $header.AutoSize = $true
-    $header.Location = New-Object System.Drawing.Point(16, 14)
-    $form.Controls.Add($header)
+    $header.Dock = [System.Windows.Forms.DockStyle]::Top
+    $header.Margin = New-Object System.Windows.Forms.Padding(0)
 
     $subtitle = New-Object System.Windows.Forms.Label
-    $subtitle.Text = "Choose which subscriptions this run should assess. Leave everything unchecked and click OK to scan ALL."
-    $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(92, 92, 92)
-    $subtitle.Location = New-Object System.Drawing.Point(16, 42)
-    $subtitle.Size = New-Object System.Drawing.Size(520, 32)
-    $form.Controls.Add($subtitle)
+    $subtitle.Text = "Choose which subscriptions this run should assess."
+    $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(200, 220, 240)
+    $subtitle.AutoSize = $true
+    $subtitle.Dock = [System.Windows.Forms.DockStyle]::Top
+    $subtitle.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+
+    # Dock=Top controls stack in REVERSE Controls-collection order (the LAST control added
+    # ends up docked at the very top), so the subtitle must be added before the title.
+    $headerPanel.Controls.Add($subtitle)
+    $headerPanel.Controls.Add($header)
+    $root.Controls.Add($headerPanel, 0, 0)
+
+    # --- Row 1: light-blue info bar ---
+    $infoPanel = New-Object System.Windows.Forms.Panel
+    $infoPanel.BackColor = $infoBg
+    $infoPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $infoPanel.Padding = New-Object System.Windows.Forms.Padding(24, 10, 24, 10)
+    $infoPanel.AutoSize = $true
+    $infoPanel.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+
+    $infoLabel = New-Object System.Windows.Forms.Label
+    $infoLabel.Text = "At least 1 subscription is required to continue. Closing this window or clicking Cancel stops the run."
+    $infoLabel.ForeColor = $accentBlue
+    $infoLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $infoLabel.AutoSize = $true
+    $infoLabel.MaximumSize = New-Object System.Drawing.Size(900, 0)
+    $infoLabel.Dock = [System.Windows.Forms.DockStyle]::Top
+    $infoPanel.Controls.Add($infoLabel)
+    $root.Controls.Add($infoPanel, 0, 1)
+
+    # --- Row 2: filter row (label | textbox that stretches | live count) ---
+    $filterRow = New-Object System.Windows.Forms.TableLayoutPanel
+    $filterRow.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $filterRow.ColumnCount = 3
+    $filterRow.RowCount = 1
+    $filterRow.AutoSize = $true
+    $filterRow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $filterRow.Margin = New-Object System.Windows.Forms.Padding(24, 12, 24, 8)
+    [void]$filterRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    [void]$filterRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$filterRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
 
     $filterLabel = New-Object System.Windows.Forms.Label
     $filterLabel.Text = "Filter:"
     $filterLabel.AutoSize = $true
-    $filterLabel.Location = New-Object System.Drawing.Point(16, 82)
-    $form.Controls.Add($filterLabel)
+    $filterLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Left
+    $filterLabel.Margin = New-Object System.Windows.Forms.Padding(0, 6, 8, 0)
 
     $filterBox = New-Object System.Windows.Forms.TextBox
-    $filterBox.Location = New-Object System.Drawing.Point(58, 79)
-    $filterBox.Width = 220
-    $form.Controls.Add($filterBox)
+    $filterBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $filterBox.Margin = New-Object System.Windows.Forms.Padding(0, 2, 12, 0)
 
     $countLabel = New-Object System.Windows.Forms.Label
     $countLabel.Text = "0 of $($AllSubscriptions.Count) selected"
-    $countLabel.ForeColor = [System.Drawing.Color]::FromArgb(15, 108, 189)
+    $countLabel.ForeColor = $accentBlue
     $countLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
     $countLabel.AutoSize = $true
-    $countLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
-    $countLabel.Location = New-Object System.Drawing.Point(370, 82)
-    $form.Controls.Add($countLabel)
+    $countLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $countLabel.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
 
+    $filterRow.Controls.Add($filterLabel, 0, 0)
+    $filterRow.Controls.Add($filterBox, 1, 0)
+    $filterRow.Controls.Add($countLabel, 2, 0)
+    $root.Controls.Add($filterRow, 0, 2)
+
+    # --- Row 3: the subscription list (fills all remaining space) ---
     $listBox = New-Object System.Windows.Forms.CheckedListBox
-    $listBox.Location = New-Object System.Drawing.Point(16, 112)
-    $listBox.Size = New-Object System.Drawing.Size(520, 336)
-    $listBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+    $listBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $listBox.Margin = New-Object System.Windows.Forms.Padding(24, 4, 24, 4)
+    $listBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $listBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
     $listBox.CheckOnClick = $true
-    $form.Controls.Add($listBox)
+    $root.Controls.Add($listBox, 0, 3)
 
     function Update-SelectionCount {
         $n = @($checkedState.Values | Where-Object { $_ }).Count
         $countLabel.Text = "$n of $($AllSubscriptions.Count) selected"
+        if (-not $btnOk) { return }
+        $btnOk.Enabled = $n -gt 0
+        if ($btnOk.Enabled) {
+            $btnOk.BackColor = $accentBlue
+            $btnOk.ForeColor = [System.Drawing.Color]::White
+            $btnOk.Text = "OK"
+        } else {
+            $btnOk.BackColor = $disabledGray
+            $btnOk.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+            $btnOk.Text = "Select at least 1"
+        }
     }
 
     function Update-SubscriptionList {
@@ -310,57 +409,91 @@ function Show-SubscriptionPickerGui {
     $filterBox.add_TextChanged({ Update-SubscriptionList -Query $filterBox.Text })
     Update-SubscriptionList -Query ""
 
+    # --- Row 4: buttons (Select All/None on the left, Cancel/OK on the right) ---
+    # Two-column TableLayoutPanel (Percent(100) then AutoSize) instead of anchored absolute
+    # positions, so the right-hand group always ends up flush with the true right edge
+    # regardless of the window's actual width.
+    $buttonRow = New-Object System.Windows.Forms.TableLayoutPanel
+    $buttonRow.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $buttonRow.ColumnCount = 2
+    $buttonRow.RowCount = 1
+    $buttonRow.AutoSize = $true
+    $buttonRow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $buttonRow.Margin = New-Object System.Windows.Forms.Padding(24, 14, 24, 18)
+    [void]$buttonRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    [void]$buttonRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize)))
+
+    $leftFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $leftFlow.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
+    $leftFlow.AutoSize = $true
+    $leftFlow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $leftFlow.Anchor = [System.Windows.Forms.AnchorStyles]::Left
+    $leftFlow.Margin = New-Object System.Windows.Forms.Padding(0)
+
+    $rightFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $rightFlow.FlowDirection = [System.Windows.Forms.FlowDirection]::RightToLeft
+    $rightFlow.AutoSize = $true
+    $rightFlow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $rightFlow.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $rightFlow.Margin = New-Object System.Windows.Forms.Padding(0)
+
     $btnSelectAll = New-Object System.Windows.Forms.Button
     $btnSelectAll.Text = "Select All"
-    $btnSelectAll.Location = New-Object System.Drawing.Point(16, 468)
-    $btnSelectAll.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+    $btnSelectAll.Size = New-Object System.Drawing.Size(108, 36)
+    $btnSelectAll.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnSelectAll.FlatAppearance.BorderColor = $borderGray
+    $btnSelectAll.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
     $btnSelectAll.add_Click({
         foreach ($k in @($checkedState.Keys)) { $checkedState[$k] = $true }
         for ($i = 0; $i -lt $listBox.Items.Count; $i++) { $listBox.SetItemChecked($i, $true) }
         Update-SelectionCount
     })
-    $form.Controls.Add($btnSelectAll)
+    $leftFlow.Controls.Add($btnSelectAll)
 
     $btnSelectNone = New-Object System.Windows.Forms.Button
     $btnSelectNone.Text = "Select None"
-    $btnSelectNone.Location = New-Object System.Drawing.Point(104, 468)
-    $btnSelectNone.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+    $btnSelectNone.Size = New-Object System.Drawing.Size(108, 36)
+    $btnSelectNone.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnSelectNone.FlatAppearance.BorderColor = $borderGray
     $btnSelectNone.add_Click({
         foreach ($k in @($checkedState.Keys)) { $checkedState[$k] = $false }
         for ($i = 0; $i -lt $listBox.Items.Count; $i++) { $listBox.SetItemChecked($i, $false) }
         Update-SelectionCount
     })
-    $form.Controls.Add($btnSelectNone)
+    $leftFlow.Controls.Add($btnSelectNone)
 
-    $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Text = "Cancel (scan ALL)"
-    $btnCancel.Location = New-Object System.Drawing.Point(276, 468)
-    $btnCancel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
-    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-    $form.Controls.Add($btnCancel)
-
+    # FlowDirection=RightToLeft places the FIRST-added control at the rightmost position, so
+    # add OK first (rightmost/primary) then Cancel (to its left).
     $btnOk = New-Object System.Windows.Forms.Button
-    $btnOk.Text = "OK"
+    $btnOk.Text = "Select at least 1"
     $btnOk.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-    $btnOk.Location = New-Object System.Drawing.Point(456, 468)
-    $btnOk.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+    $btnOk.Size = New-Object System.Drawing.Size(140, 36)
+    $btnOk.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnOk.FlatAppearance.BorderSize = 0
+    $btnOk.Enabled = $false
+    $btnOk.BackColor = $disabledGray
+    $btnOk.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
     $btnOk.add_Click({
-        # Clicking OK with nothing checked would silently scan ALL - always confirm that
-        # explicitly instead of assuming it, so an accidental click never scans more than intended.
-        $anyChecked = @($checkedState.Values | Where-Object { $_ }).Count -gt 0
-        if (-not $anyChecked) {
-            $confirm = [System.Windows.Forms.MessageBox]::Show(
-                $form,
-                "No subscriptions are checked. Scan ALL enabled subscriptions instead?",
-                "Confirm scan scope",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Question)
-            if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-        }
+        # OK is only enabled once at least one subscription is checked (see Update-SelectionCount),
+        # so reaching here always means a non-empty selection - no scan-ALL fallback anymore.
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Close()
     })
-    $form.Controls.Add($btnOk)
+    $rightFlow.Controls.Add($btnOk)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Size = New-Object System.Drawing.Size(110, 36)
+    $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnCancel.ForeColor = $stopRed
+    $btnCancel.FlatAppearance.BorderColor = $stopRed
+    $btnCancel.Margin = New-Object System.Windows.Forms.Padding(0, 0, 10, 0)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $rightFlow.Controls.Add($btnCancel)
+
+    $buttonRow.Controls.Add($leftFlow, 0, 0)
+    $buttonRow.Controls.Add($rightFlow, 1, 0)
+    $root.Controls.Add($buttonRow, 0, 4)
 
     $form.AcceptButton = $btnOk
     $form.CancelButton = $btnCancel
@@ -388,29 +521,34 @@ function Select-WorkshopSubscriptions {
 
     if (-not [Environment]::UserInteractive) { return $AllSubscriptions }
 
+    $guiAvailable = $true
     try {
         $pickedIds = Show-SubscriptionPickerGui -AllSubscriptions $AllSubscriptions
+    } catch {
+        $guiAvailable = $false
+        Write-Host "  Graphical subscription picker unavailable ($($_.Exception.Message)) - falling back to a text picker." -ForegroundColor DarkYellow
+    }
+
+    if ($guiAvailable) {
+        # OK in the picker is only enabled once >=1 subscription is checked, so an empty
+        # result here always means Cancel/closed - stop the run rather than defaulting to ALL.
         if ($pickedIds.Count -eq 0) {
-            Write-Host "No subscriptions selected in the picker - scanning ALL enabled subscriptions." -ForegroundColor DarkYellow
-            return $AllSubscriptions
+            throw "No subscriptions were selected - stopping the run. Re-run the launcher and select at least one subscription (or pass -SubscriptionIds)."
         }
         return @($AllSubscriptions | Where-Object { $_.Id -in $pickedIds })
-    } catch {
-        Write-Host "  Graphical subscription picker unavailable ($($_.Exception.Message)) - falling back to a text picker." -ForegroundColor DarkYellow
     }
 
     Write-Host "`nEnabled subscriptions in this tenant:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $AllSubscriptions.Count; $i++) {
         Write-Host ("  [{0}] {1} ({2})" -f ($i + 1), $AllSubscriptions[$i].Name, $AllSubscriptions[$i].Id)
     }
-    $selection = Read-Host "`nEnter subscription numbers to scan (e.g. 1,3,5), or press Enter to scan ALL"
-    if (-not $selection) { return $AllSubscriptions }
+    $selection = Read-Host "`nEnter subscription numbers to scan (e.g. 1,3,5) - at least one is required"
+    if (-not $selection) { throw "No subscriptions were selected - stopping the run." }
 
     $indexes = @($selection -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { [int]$_ - 1 })
     $picked = @($indexes | Where-Object { $_ -ge 0 -and $_ -lt $AllSubscriptions.Count } | ForEach-Object { $AllSubscriptions[$_] })
     if ($picked.Count -eq 0) {
-        Write-Warning "No valid selection recognized - scanning ALL enabled subscriptions instead."
-        return $AllSubscriptions
+        throw "No valid subscription selection recognized - stopping the run."
     }
     return $picked
 }
@@ -539,6 +677,10 @@ Remove-Item Env:\AZWORKSHOP_SUBSCRIPTION_IDS -ErrorAction SilentlyContinue
 $elapsed = (Get-Date) - $startTime
 Write-Host "`nALL PHASES COMPLETE" -ForegroundColor Green
 Write-Host "Duration: $([math]::Round($elapsed.TotalMinutes, 1)) minutes" -ForegroundColor Green
+Write-Host "Subscriptions analyzed ($($assessmentSubscriptions.Count)):" -ForegroundColor Green
+foreach ($sub in $assessmentSubscriptions) {
+    Write-Host "  - $($sub.Name) ($($sub.Id))" -ForegroundColor White
+}
 Write-Host "Output:   $OutputDir" -ForegroundColor Green
 Write-Host "  01_Discovery/    - Resource inventory (Excel)" -ForegroundColor White
 Write-Host "  02_Advisor/      - Advisor recommendations (Excel)" -ForegroundColor White

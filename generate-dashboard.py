@@ -75,6 +75,12 @@ def bi(en: str, es: str, pt: Optional[str] = None) -> str:
     return f'<span class="i18n-en">{en}</span><span class="i18n-es">{es}</span><span class="i18n-pt">{pt}</span>'
 
 
+def it(en: str, es: str, pt: Optional[str] = None) -> str:
+    """Azure-Portal-style info tooltip: a small 'i' circle placed next to a section title
+    that reveals explanatory text only on hover/focus (keyboard-accessible via tabindex)."""
+    return f'<span class="info-tip" tabindex="0"><span aria-hidden="true">i</span><span class="info-tip-bubble">{bi(en, es, pt)}</span></span>'
+
+
 def _cell_html(value) -> str:
     """Escape a table cell value, except values already produced by bi() (pre-safe markup)."""
     text = str(value)
@@ -1760,11 +1766,11 @@ class DashboardGenerator:
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM', 'Recomendações CSPM')}</div>
+            <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM', 'Recomendações CSPM')}{it('Defender for Cloud Cloud Security Posture Management findings from Azure Resource Graph - unresolved recommendations against your subscriptions.', 'Hallazgos de Cloud Security Posture Management de Defender for Cloud, obtenidos vía Azure Resource Graph: recomendaciones sin resolver en tus suscripciones.', 'Descobertas de Cloud Security Posture Management do Defender for Cloud, via Azure Resource Graph: recomendações não resolvidas em suas assinaturas.')}</div>
             {recommendations_table}
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Regulatory and framework compliance', 'Cumplimiento normativo y de marcos', 'Conformidade regulatória e de frameworks')}</div>
+            <div class="section-title security-title">{bi('Regulatory and framework compliance', 'Cumplimiento normativo y de marcos', 'Conformidade regulatória e de frameworks')}{it('Compliance against built-in regulatory standards (e.g. ISO 27001, PCI-DSS) and the Microsoft Cloud Security Benchmark (MCSB), as evaluated by Defender for Cloud.', 'Cumplimiento con estándares regulatorios integrados (p.ej. ISO 27001, PCI-DSS) y el Microsoft Cloud Security Benchmark (MCSB), evaluado por Defender for Cloud.', 'Conformidade com padrões regulatórios internos (ex.: ISO 27001, PCI-DSS) e o Microsoft Cloud Security Benchmark (MCSB), avaliada pelo Defender for Cloud.')}</div>
             {compliance_bars}
         </div>
         <div class="security-two-column">
@@ -1776,21 +1782,21 @@ class DashboardGenerator:
             <div class="security-panel"><h3>{bi('Data source coverage', 'Cobertura de fuentes de datos', 'Cobertura de fontes de dados')}</h3>{source_table}</div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Defender XDR operations', 'Operaciones de Defender XDR', 'Operações do Defender XDR')}</div>
+            <div class="section-title security-title">{bi('Defender XDR operations', 'Operaciones de Defender XDR', 'Operações do Defender XDR')}{it('Recent security incidents and alerts from Microsoft Defender XDR, via Microsoft Graph - requires a signed-in session with Security Reader access.', 'Incidentes y alertas de seguridad recientes de Microsoft Defender XDR, vía Microsoft Graph - requiere una sesión iniciada con acceso de Security Reader.', 'Incidentes e alertas de segurança recentes do Microsoft Defender XDR, via Microsoft Graph - requer uma sessão autenticada com acesso de Security Reader.')}</div>
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Recent incidents', 'Incidentes recientes', 'Incidentes recentes')}</h3>{incidents_table}</div>
                 <div class="security-panel"><h3>{bi('Recent alerts', 'Alertas recientes', 'Alertas recentes')}</h3>{alerts_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Defender for Endpoint exposure', 'Exposición de Defender for Endpoint', 'Exposição do Defender for Endpoint')}</div>
+            <div class="section-title security-title">{bi('Defender for Endpoint exposure', 'Exposición de Defender for Endpoint', 'Exposição do Defender for Endpoint')}{it('Onboarded devices, endpoint security recommendations and vulnerabilities reported by Defender for Endpoint.', 'Dispositivos incorporados, recomendaciones de seguridad de endpoints y vulnerabilidades reportadas por Defender for Endpoint.', 'Dispositivos integrados, recomendações de segurança de endpoints e vulnerabilidades reportadas pelo Defender for Endpoint.')}</div>
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad', 'Recomendações de segurança')}</h3>{endpoint_recommendations_table}</div>
                 <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Credential and identity hygiene', 'Higiene de credenciales e identidad', 'Higiene de credenciais e identidade')}</div>
+            <div class="section-title security-title">{bi('Credential and identity hygiene', 'Higiene de credenciales e identidad', 'Higiene de credenciais e identidade')}{it('Expiring app registration secrets/certificates and guest (B2B) accounts, sourced from Microsoft Graph.', 'Secretos/certificados de registros de aplicaciones por expirar y cuentas invitadas (B2B), obtenidos de Microsoft Graph.', 'Segredos/certificados de registros de aplicativos a expirar e contas convidadas (B2B), obtidos do Microsoft Graph.')}</div>
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Key Vault secret/certificate expiration', 'Expiraci\u00f3n de secretos/certificados de Key Vault', 'Expiração de segredos/certificados do Key Vault')}</h3>{keyvault_expirations_table}</div>
                 <div class="security-panel"><h3>{bi('App registration credential expiration', 'Expiraci\u00f3n de credenciales de registros de aplicaciones', 'Expiração de credenciais de registro de aplicativos')}</h3>{app_credential_table}</div>
@@ -2463,11 +2469,11 @@ class DashboardGenerator:
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title security-title">{bi('Hierarchy map', 'Mapa de jerarqu\u00eda', 'Mapa de hierarquia')}</div>
+            <div class="section-title security-title">{bi('Hierarchy map', 'Mapa de jerarqu\u00eda', 'Mapa de hierarquia')}{it('Interactive org-chart of Management Groups and Subscriptions (expand a subscription to see its Resource Groups/resources), built from the Governance export.', 'Organigrama interactivo de Grupos de Administraci\u00f3n y Suscripciones (expande una suscripci\u00f3n para ver sus Grupos de Recursos/recursos), construido desde la exportaci\u00f3n de Governance.', 'Organograma interativo de Grupos de Gerenciamento e Assinaturas (expanda uma assinatura para ver seus Grupos de Recursos/recursos), constru\u00eddo a partir da exporta\u00e7\u00e3o do Governance.')}</div>
             {hierarchy_html}
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Resource explorer', 'Explorador de recursos', 'Explorador de recursos')}</div>
+            <div class="section-title security-title">{bi('Resource explorer', 'Explorador de recursos', 'Explorador de recursos')}{it('Drill-down list of Resource Groups and individual resources per subscription, sourced from the Discovery phase inventory.', 'Lista detallada de Grupos de Recursos y recursos individuales por suscripción, obtenida del inventario de la fase de Discovery.', 'Lista detalhada de Grupos de Recursos e recursos individuais por assinatura, obtida do inventário da fase de Discovery.')}</div>
             <div class="rg-explorer-wrap">{resource_explorer_html}</div>
         </div>
         <div class="security-two-column">
@@ -2488,18 +2494,18 @@ class DashboardGenerator:
         </div>
         <div class="security-two-column">
             <div class="security-panel"><h3>{bi('Defender for Cloud plans', 'Planes de Defender for Cloud', 'Planos do Defender for Cloud')}</h3>{defender_plans_table}</div>
-            <div class="security-panel"><h3>{bi('Secure Score by subscription', 'Secure Score por suscripci\u00f3n', 'Secure Score por assinatura')}</h3>{secure_scores_table}</div>
+            <div class="security-panel"><h3>{bi('Secure Score by subscription', 'Secure Score por suscripci\u00f3n', 'Secure Score por assinatura')}{it('Microsoft Defender Secure Score percentage per subscription, from the Defender for Cloud scoring API.', 'Porcentaje del Secure Score de Microsoft Defender por suscripci\u00f3n, de la API de puntuaci\u00f3n de Defender for Cloud.', 'Percentual do Secure Score do Microsoft Defender por assinatura, da API de pontua\u00e7\u00e3o do Defender for Cloud.')}</h3>{secure_scores_table}</div>
         </div>
         <div class="security-two-column">
             <div class="security-panel"><h3>{bi('Resources by type & location', 'Recursos por tipo y ubicaci\u00f3n', 'Recursos por tipo e localiza\u00e7\u00e3o')}</h3>{resource_summary_table}</div>
             <div class="security-panel"><h3>{bi('Orphaned resources (cost savings)', 'Recursos hu\u00e9rfanos (ahorro de costos)', 'Recursos \u00f3rf\u00e3os (economia de custos)')}</h3>{orphaned_table}</div>
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Virtual networks', 'Redes virtuales', 'Redes virtuais')}</div>
+            <div class="section-title security-title">{bi('Virtual networks', 'Redes virtuales', 'Redes virtuais')}{it('Network topology inventory (address spaces, subnets, DDoS protection) collected during the Discovery phase.', 'Inventario de topología de red (espacios de direcciones, subredes, protección DDoS) recolectado durante la fase de Discovery.', 'Inventário de topologia de rede (espaços de endereços, sub-redes, proteção DDoS) coletado durante a fase de Discovery.')}</div>
             {vnets_table}
         </div>
         <div class="section">
-            <div class="section-title security-title">{bi('Scope insights', 'Detalles por alcance', 'Detalhes por escopo')}</div>
+            <div class="section-title security-title">{bi('Scope insights', 'Detalles por alcance', 'Detalhes por escopo')}{it('Policy assignment and RBAC role counts rolled up per Management Group scope - click a row to expand its detail.', 'Recuento de asignaciones de políticas y roles RBAC por alcance de Grupo de Administración - haz clic en una fila para ver su detalle.', 'Contagem de atribuições de política e funções RBAC por escopo de Grupo de Gerenciamento - clique em uma linha para ver seu detalhe.')}</div>
             <div class="scope-insights">{scope_insights_html}</div>
         </div>"""
 
@@ -2783,11 +2789,19 @@ class DashboardGenerator:
         for r in reservation_recs:
             savings = as_float(r.get("NetSavings"))
             r["NetSavingsDisplay"] = f"{savings:,.0f} {r.get('Currency', '') or ''}".strip() if savings else ""
+        for r in plan_rightsizing:
+            currency = r.get("Currency") or ""
+            r["CurrentMonthlyCostDisplay"] = f"{as_float(r.get('CurrentMonthlyCost')):,.0f} {currency}".strip() if r.get("CurrentMonthlyCost") is not None else ""
+            r["EstMonthlySavingsDisplay"] = f"{as_float(r.get('EstMonthlySavings')):,.0f} {currency}".strip() if r.get("EstMonthlySavings") is not None else ""
+            r["EstAnnualSavingsDisplay"] = f"{as_float(r.get('EstAnnualSavings')):,.0f} {currency}".strip() if r.get("EstAnnualSavings") is not None else ""
 
         cost_recs_table = render_table(cost_recs, [
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("impact", "Impact", "Impacto", False),
             ("problem", "Problem", "Problema", False),
             ("solution", "Solution", "Soluci\u00f3n", False),
+            ("currentSku", "Current SKU", "SKU Actual", False),
+            ("targetSku", "Target SKU", "SKU Objetivo", False),
             ("AnnualSavingsDisplay", "Annual Savings", "Ahorro Anual", True),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor cost recommendations found.", "No se encontraron recomendaciones de costos de Advisor.")
@@ -2801,6 +2815,7 @@ class DashboardGenerator:
         ], "No reservation/savings plan opportunities found.", "No se encontraron oportunidades de reservas/planes de ahorro.")
         vm_table = render_table(vm_rightsizing, [
             ("Name", "VM", "VM", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("VMSize", "Size", "Tama\u00f1o", False),
             ("AvgCPU_Pct", "Avg CPU %", "CPU Prom. %", True),
@@ -2809,6 +2824,7 @@ class DashboardGenerator:
         ], "No VM right-sizing data found.", "No se encontraron datos de ajuste de tama\u00f1o de VMs.")
         sql_table = render_table(sql_rightsizing, [
             ("Name", "Database", "Base de Datos", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("SKU", "SKU", "SKU", False),
             ("MetricType", "Metric", "M\u00e9trica", False),
@@ -2817,14 +2833,20 @@ class DashboardGenerator:
         ], "No SQL right-sizing data found.", "No se encontraron datos de ajuste de tama\u00f1o de SQL.")
         plan_table = render_table(plan_rightsizing, [
             ("Name", "App Plan", "Plan de App", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("SKU", "SKU", "SKU", False),
             ("Workers", "Workers", "Workers", True),
             ("AvgCPU_Pct", "Avg CPU %", "CPU Prom. %", True),
             ("Assessment", "Assessment", "Evaluaci\u00f3n", False),
+            ("TargetSKU", "Suggested SKU", "SKU Sugerido", False),
+            ("CurrentMonthlyCostDisplay", "Est. Monthly Cost", "Costo Mensual Est.", True),
+            ("EstMonthlySavingsDisplay", "Est. Monthly Savings", "Ahorro Mensual Est.", True),
+            ("EstAnnualSavingsDisplay", "Est. Annual Savings", "Ahorro Anual Est.", True),
         ], "No App Service Plan right-sizing data found.", "No se encontraron datos de ajuste de Planes de App Service.")
         storage_table = render_table(storage_activity, [
             ("Name", "Storage Account", "Cuenta de Almacenamiento", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("SKU", "SKU", "SKU", False),
             ("AvgDailyTxns", "Avg Daily Txns", "Trans. Diarias Prom.", True),
@@ -2852,12 +2874,100 @@ class DashboardGenerator:
         for r in actual_cost_sorted:
             r["CostDisplay"] = f"{as_float(r.get('Cost')):,.2f} {r.get('Currency', '') or ''}".strip()
             r["MonthDisplay"] = month_label(r.get("BillingMonth"))
-        actual_cost_table = render_table(actual_cost_sorted, [
-            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
-            ("ServiceName", "Service", "Servicio", False),
-            ("MonthDisplay", "Month", "Mes", False),
-            ("CostDisplay", "Cost", "Costo", True),
-        ], "No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).", limit=20)
+
+        def render_cost_pivot(rows):
+            """Service x Month pivot (with a Total column/row) - far easier to scan than a flat
+            Subscription/Service/Month/Cost list once there are more than a handful of rows."""
+            services = sorted({r.get("ServiceName") for r in rows if r.get("ServiceName")})
+            months = sorted({r.get("BillingMonth") for r in rows if r.get("BillingMonth") is not None}, key=month_sort_key)
+            if not services or not months:
+                return f'<p class="empty-state">{bi("No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).", "Nenhum dado de custo real encontrado (requer a fun\u00e7\u00e3o Cost Management Reader).")}</p>'
+            cost_map = defaultdict(float)
+            totals = defaultdict(float)
+            for r in rows:
+                svc = r.get("ServiceName")
+                mon = r.get("BillingMonth")
+                if not svc or mon is None:
+                    continue
+                c = as_float(r.get("Cost"))
+                cost_map[(svc, mon)] += c
+                totals[svc] += c
+            services_sorted = sorted(services, key=lambda s: totals.get(s, 0), reverse=True)
+            currency = next((r.get("Currency") for r in rows if r.get("Currency")), "") or ""
+            month_totals = {m: sum(cost_map.get((s, m), 0) for s in services) for m in months}
+            grand_total = sum(totals.values())
+            header = f"<th>{bi('Service', 'Servicio', 'Servi\u00e7o')}</th>" + "".join(
+                f'<th class="num">{escape(month_label(m))}</th>' for m in months
+            ) + f'<th class="num">{bi("Total", "Total", "Total")}</th>'
+            limit = 15
+            body = ""
+            for i, svc in enumerate(services_sorted):
+                cells = "".join(f'<td class="num">{cost_map.get((svc, m), 0):,.0f}</td>' for m in months)
+                row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                body += f'<tr{row_attr}><td>{escape(svc)}</td>{cells}<td class="num"><strong>{totals[svc]:,.0f}</strong></td></tr>'
+            total_cells = "".join(f'<td class="num">{month_totals.get(m, 0):,.0f}</td>' for m in months)
+            footer = f'<tr class="cost-pivot-total-row"><td>{bi("Total", "Total", "Total")}</td>{total_cells}<td class="num">{grand_total:,.0f} {escape(currency)}</td></tr>'
+            more = ""
+            if len(services_sorted) > limit:
+                more_text = bi(f"+ {len(services_sorted) - limit} more", f"+ {len(services_sorted) - limit} m\u00e1s", f"+ {len(services_sorted) - limit} mais")
+                less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
+                more = (
+                    '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+                    f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+                )
+            return f'<div class="cost-pivot-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}{footer}</tbody></table></div>{more}'
+
+        def render_actual_cost_section(rows):
+            """Service x Month pivot with a multi-select Subscription checkbox filter. The pivot
+            is rebuilt client-side (see initCostPivotBlocks() in the page script) from the raw
+            per-subscription rows embedded as JSON, so any combination of subscriptions can be
+            selected at once - not just one at a time."""
+            if not rows:
+                return f'<p class="empty-state">{bi("No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).", "Nenhum dado de custo real encontrado (requer a fun\u00e7\u00e3o Cost Management Reader).")}</p>'
+            subs = sorted({r.get("Subscription") for r in rows if r.get("Subscription")})
+            if len(subs) <= 1:
+                # Only one subscription in scope - a checkbox filter would be pointless, but
+                # still label which subscription the numbers below belong to.
+                pivot_html = render_cost_pivot(rows)
+                if not subs:
+                    return pivot_html
+                label = (
+                    '<div class="cost-pivot-toolbar cost-pivot-static-label">'
+                    f'<span class="cost-pivot-toolbar-label">{bi("Subscription", "Suscripci\u00f3n", "Assinatura")}:</span>'
+                    f'<span class="cost-pivot-sub-badge">{escape(subs[0])}</span>'
+                    '</div>'
+                )
+                return f'{label}{pivot_html}'
+
+            agg = defaultdict(float)
+            for r in rows:
+                svc, mon, sub = r.get("ServiceName"), r.get("BillingMonth"), r.get("Subscription") or ""
+                if not svc or mon is None:
+                    continue
+                agg[(sub, svc, month_label(mon))] += as_float(r.get("Cost"))
+            months_sorted = sorted({r.get("BillingMonth") for r in rows if r.get("BillingMonth") is not None}, key=month_sort_key)
+            currency = next((r.get("Currency") for r in rows if r.get("Currency")), "") or ""
+            payload = json.dumps({
+                "months": [month_label(m) for m in months_sorted],
+                "currency": currency,
+                "rows": [{"sub": k[0], "svc": k[1], "month": k[2], "cost": round(v, 2)} for k, v in agg.items()],
+            }, ensure_ascii=False)
+
+            checks = "".join(
+                f'<label class="cost-pivot-sub-check"><input type="checkbox" value="{escape(s)}" checked> {escape(s)}</label>'
+                for s in subs
+            )
+            toolbar = (
+                '<div class="cost-pivot-toolbar">'
+                f'<span class="cost-pivot-toolbar-label">{bi("Subscriptions", "Suscripciones", "Assinaturas")}:</span>'
+                f'{checks}'
+                f'<button type="button" class="cost-pivot-selectall" data-mode="all">{bi("All", "Todas", "Todas")}</button>'
+                f'<button type="button" class="cost-pivot-selectall" data-mode="none">{bi("None", "Ninguna", "Nenhuma")}</button>'
+                '</div>'
+            )
+            return f'<div class="cost-pivot-block" data-payload="{escape(payload)}">{toolbar}<div class="cost-pivot-render-target"></div></div>'
+
+        actual_cost_table = render_actual_cost_section(actual_cost_rows)
         cost_trend_chart = render_cost_trend_chart(actual_cost_rows)
         cost_by_service_bars = render_cost_breakdown_bars(
             actual_cost_rows, "ServiceName",
@@ -2936,6 +3046,7 @@ class DashboardGenerator:
         extended_recs_table = render_table(extended_recs, [
             ("CheckType", "Check", "Verificaci\u00f3n", False),
             ("name", "Resource", "Recurso", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("location", "Location", "Ubicaci\u00f3n", False),
         ], "No extended FinOps findings.", "No se encontraron hallazgos FinOps extendidos.", limit=20)
@@ -2952,7 +3063,7 @@ class DashboardGenerator:
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Cost trends', 'Tendencias de costos', 'Tend\u00eancias de custos')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Cost trends', 'Tendencias de costos', 'Tendências de custos')}{it('Monthly spend trend from Cost Management, compared against the previous period.', 'Tendencia de gasto mensual de Cost Management, comparada con el período anterior.', 'Tendência de gasto mensal do Cost Management, comparada com o período anterior.')}</div>
             {cost_trend_chart if cost_trend_chart else f'<p class="empty-state">{bi("No actual cost data found (requires Cost Management Reader).", "No se encontraron datos de costo real (requiere el rol Cost Management Reader).", "Nenhum dado de custo real encontrado (requer a fun\u00e7\u00e3o Cost Management Reader).")}</p>'}
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Cost by service', 'Costo por servicio', 'Custo por servi\u00e7o')}</h3>{cost_by_service_bars}</div>
@@ -2964,16 +3075,16 @@ class DashboardGenerator:
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Budgets vs. actual spend', 'Presupuestos vs. gasto real', 'Or\u00e7amentos vs. gasto real')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Budgets vs. actual spend', 'Presupuestos vs. gasto real', 'Or\u00e7amentos vs. gasto real')}{it('Configured Azure Budgets compared with actual spend to date, highlighting budgets at risk of being exceeded.', 'Presupuestos de Azure configurados comparados con el gasto real a la fecha, resaltando los que est\u00e1n en riesgo de excederse.', 'Or\u00e7amentos do Azure configurados comparados com o gasto real at\u00e9 o momento, destacando os que est\u00e3o em risco de serem excedidos.')}</div>
             {budget_bars_html}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-danger);">{bi('Expensive services with open risk findings', 'Servicios costosos con hallazgos de riesgo abiertos', 'Servi\u00e7os caros com descobertas de risco abertas')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-danger);">{bi('Expensive services with open risk findings', 'Servicios costosos con hallazgos de riesgo abiertos', 'Servi\u00e7os caros com descobertas de risco abertas')}{it('High-spend services cross-referenced with open Advisor/Defender findings, to prioritize cost and risk together.', 'Servicios de mayor gasto cruzados con hallazgos abiertos de Advisor/Defender, para priorizar costo y riesgo en conjunto.', 'Servi\u00e7os de maior gasto cruzados com descobertas abertas do Advisor/Defender, para priorizar custo e risco juntos.')}</div>
             {expensive_at_risk_table}
         </div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o', 'Oportunidades de ajuste de tamanho')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Right-sizing opportunities', 'Oportunidades de ajuste de tama\u00f1o', 'Oportunidades de ajuste de tamanho')}{it('Advisor recommendations to resize or shut down underutilized compute and database resources.', 'Recomendaciones de Advisor para redimensionar o apagar recursos de c\u00f3mputo y bases de datos subutilizados.', 'Recomenda\u00e7\u00f5es do Advisor para redimensionar ou desligar recursos de computa\u00e7\u00e3o e banco de dados subutilizados.')}</div>
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales', 'M\u00e1quinas Virtuais')}</h3>{render_distribution(vm_rightsizing)}{vm_table}</div>
                 <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL', 'Bancos de Dados SQL')}</h3>{render_distribution(sql_rightsizing)}{sql_table}</div>
@@ -2984,7 +3095,7 @@ class DashboardGenerator:
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Idle and orphaned resources', 'Recursos inactivos y hu\u00e9rfanos', 'Recursos ociosos e \u00f3rf\u00e3os')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Idle and orphaned resources', 'Recursos inactivos y hu\u00e9rfanos', 'Recursos ociosos e \u00f3rf\u00e3os')}{it('Resources with no active workload (unattached disks, unused public IPs, stopped-but-billed VMs) that are safe cleanup candidates.', 'Recursos sin carga de trabajo activa (discos sin adjuntar, IPs p\u00fablicas sin uso, VMs detenidas pero facturadas) candidatos seguros para limpieza.', 'Recursos sem carga de trabalho ativa (discos n\u00e3o anexados, IPs p\u00fablicos n\u00e3o utilizados, VMs paradas mas cobradas) candidatos seguros para limpeza.')}</div>
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Deallocated VMs', 'VMs Desasignadas', 'VMs Desalocadas')}</h3>{dealloc_table}</div>
                 <div class="security-panel"><h3>{bi('Unattached Managed Disks', 'Discos Administrados No Adjuntos', 'Discos Gerenciados N\u00e3o Anexados')}</h3>{unattached_disks_table}</div>
@@ -2995,23 +3106,23 @@ class DashboardGenerator:
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Actual spend (last 6 months)', 'Gasto real (\u00faltimos 6 meses)', 'Gasto real (\u00faltimos 6 meses)')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Actual spend (last 6 months)', 'Gasto real (\u00faltimos 6 meses)', 'Gasto real (\u00faltimos 6 meses)')}{it('Six-month historical spend by service, from Cost Management usage details.', 'Gasto hist\u00f3rico de seis meses por servicio, de los detalles de uso de Cost Management.', 'Gasto hist\u00f3rico de seis meses por servi\u00e7o, dos detalhes de uso do Cost Management.')}</div>
             {actual_cost_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Extended FinOps checks', 'Verificaciones FinOps extendidas', 'Verifica\u00e7\u00f5es FinOps estendidas')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Extended FinOps checks', 'Verificaciones FinOps extendidas', 'Verifica\u00e7\u00f5es FinOps estendidas')}{it('Additional FinOps hygiene checks (cost allocation tagging, anomaly detection) beyond the core recommendations.', 'Verificaciones adicionales de higiene FinOps (etiquetado para asignaci\u00f3n de costos, detecci\u00f3n de anomal\u00edas) m\u00e1s all\u00e1 de las recomendaciones principales.', 'Verifica\u00e7\u00f5es adicionais de higiene FinOps (tags para aloca\u00e7\u00e3o de custos, detec\u00e7\u00e3o de anomalias) al\u00e9m das recomenda\u00e7\u00f5es principais.')}</div>
             {extended_recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Advisor cost recommendations', 'Recomendaciones de costos de Advisor', 'Recomenda\u00e7\u00f5es de custo do Advisor')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Advisor cost recommendations', 'Recomendaciones de costos de Advisor', 'Recomenda\u00e7\u00f5es de custo do Advisor')}{it('Cost optimization recommendations generated by Azure Advisor.', 'Recomendaciones de optimizaci\u00f3n de costos generadas por Azure Advisor.', 'Recomenda\u00e7\u00f5es de otimiza\u00e7\u00e3o de custo geradas pelo Azure Advisor.')}</div>
             {cost_recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Reservation and Savings Plan opportunities', 'Oportunidades de Reservas y Planes de Ahorro', 'Oportunidades de Reservas e Planos de Economia')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Reservation and Savings Plan opportunities', 'Oportunidades de Reservas y Planes de Ahorro', 'Oportunidades de Reservas e Planos de Economia')}{it('Potential savings from Reserved Instances or Savings Plans, based on your recent usage patterns.', 'Ahorros potenciales de Instancias Reservadas o Planes de Ahorro, basados en tus patrones de uso recientes.', 'Economias potenciais de Instâncias Reservadas ou Planos de Economia, com base em seus padrões de uso recentes.')}</div>
             {reservation_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-success);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}{it('Prioritized cost actions, ranked by estimated savings impact.', 'Acciones de costo priorizadas, ordenadas por el ahorro estimado.', 'A\u00e7\u00f5es de custo priorizadas, ordenadas pelo impacto de economia estimado.')}</div>
             {self._render_actions_for_pillar("Cost Optimization")}
         </div>"""
 
@@ -3202,7 +3313,7 @@ class DashboardGenerator:
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('VMs without Availability Zones', 'VMs sin Zonas de Disponibilidad', 'VMs sem Zonas de Disponibilidade')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('VMs without Availability Zones', 'VMs sin Zonas de Disponibilidad', 'VMs sem Zonas de Disponibilidade')}{it('Virtual machines not deployed across Availability Zones, representing a single point of failure risk.', 'M\u00e1quinas virtuales que no est\u00e1n distribuidas en Zonas de Disponibilidad, lo que representa un riesgo de punto \u00fanico de falla.', 'M\u00e1quinas virtuais n\u00e3o distribu\u00eddas em Zonas de Disponibilidade, representando um risco de ponto \u00fanico de falha.')}</div>
             {vms_table}
         </div>
         <div class="security-two-column">
@@ -3210,23 +3321,23 @@ class DashboardGenerator:
             <div class="security-panel"><h3>{bi('VNets without DDoS Protection', 'VNets sin Protecci\u00f3n DDoS', 'VNets sem Prote\u00e7\u00e3o DDoS')}</h3>{vnets_table}</div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Real backup coverage (protected items)', 'Cobertura real de backup (elementos protegidos)', 'Cobertura real de backup (itens protegidos)')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Real backup coverage (protected items)', 'Cobertura real de backup (elementos protegidos)', 'Cobertura real de backup (itens protegidos)')}{it('Resources actually protected by Azure Backup / Recovery Services vaults, versus resources that should be protected.', 'Recursos realmente protegidos por Azure Backup / b\u00f3vedas de Recovery Services, frente a los recursos que deber\u00edan estarlo.', 'Recursos realmente protegidos por Azure Backup / cofres do Recovery Services, versus os recursos que deveriam estar protegidos.')}</div>
             {protected_items_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Resource / Service Health events', 'Eventos de Resource Health / Service Health', 'Eventos de Resource Health / Service Health')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Resource / Service Health events', 'Eventos de Resource Health / Service Health', 'Eventos de Resource Health / Service Health')}{it('Recent Azure Resource Health and Service Health events affecting your resources.', 'Eventos recientes de Resource Health y Service Health de Azure que afectan tus recursos.', 'Eventos recentes de Resource Health e Service Health do Azure que afetam seus recursos.')}</div>
             {health_events_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor', 'Recomenda\u00e7\u00f5es de confiabilidade do Advisor')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor', 'Recomenda\u00e7\u00f5es de confiabilidade do Advisor')}{it('Reliability recommendations generated by Azure Advisor.', 'Recomendaciones de confiabilidad generadas por Azure Advisor.', 'Recomenda\u00e7\u00f5es de confiabilidade geradas pelo Azure Advisor.')}</div>
             {recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}{it('How the reliability score is calculated, broken down by category and subcategory.', 'C\u00f3mo se calcula el puntaje de confiabilidad, desglosado por categor\u00eda y subcategor\u00eda.', 'Como a pontua\u00e7\u00e3o de confiabilidade \u00e9 calculada, detalhada por categoria e subcategoria.')}</div>
             {self._render_subcategory_table("Reliability")}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}{it('Prioritized reliability actions, ranked by score impact.', 'Acciones de confiabilidad priorizadas, ordenadas por impacto en el puntaje.', 'A\u00e7\u00f5es de confiabilidade priorizadas, ordenadas pelo impacto na pontua\u00e7\u00e3o.')}</div>
             {self._render_actions_for_pillar("Reliability")}
         </div>"""
 
@@ -3315,22 +3426,22 @@ class DashboardGenerator:
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Resource saturation', 'Saturaci\u00f3n de recursos', 'Satura\u00e7\u00e3o de recursos')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Resource saturation', 'Saturaci\u00f3n de recursos', 'Satura\u00e7\u00e3o de recursos')}{it('CPU, memory and other utilization metrics showing resources running near capacity.', 'M\u00e9tricas de CPU, memoria y otros indicadores de uso que muestran recursos operando cerca del l\u00edmite de capacidad.', 'M\u00e9tricas de CPU, mem\u00f3ria e outros indicadores de uso mostrando recursos operando perto da capacidade m\u00e1xima.')}</div>
             <div class="security-two-column">
                 <div class="security-panel"><h3>{bi('Virtual Machines', 'M\u00e1quinas Virtuales', 'M\u00e1quinas Virtuais')}</h3>{vm_table}</div>
                 <div class="security-panel"><h3>{bi('SQL Databases', 'Bases de Datos SQL', 'Bancos de Dados SQL')}</h3>{sql_table}</div>
             </div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Advisor performance recommendations', 'Recomendaciones de rendimiento de Advisor', 'Recomenda\u00e7\u00f5es de desempenho do Advisor')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Advisor performance recommendations', 'Recomendaciones de rendimiento de Advisor', 'Recomenda\u00e7\u00f5es de desempenho do Advisor')}{it('Performance recommendations generated by Azure Advisor.', 'Recomendaciones de rendimiento generadas por Azure Advisor.', 'Recomenda\u00e7\u00f5es de desempenho geradas pelo Azure Advisor.')}</div>
             {recs_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}{it('How the performance score is calculated, broken down by category and subcategory.', 'C\u00f3mo se calcula el puntaje de rendimiento, desglosado por categor\u00eda y subcategor\u00eda.', 'Como a pontua\u00e7\u00e3o de desempenho \u00e9 calculada, detalhada por categoria e subcategoria.')}</div>
             {self._render_subcategory_table("Performance Efficiency")}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-warning);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}{it('Prioritized performance actions, ranked by score impact.', 'Acciones de rendimiento priorizadas, ordenadas por impacto en el puntaje.', 'A\u00e7\u00f5es de desempenho priorizadas, ordenadas pelo impacto na pontua\u00e7\u00e3o.')}</div>
             {self._render_actions_for_pillar("Performance Efficiency")}
         </div>"""
 
@@ -3448,11 +3559,11 @@ class DashboardGenerator:
         <div class="security-stats">{stat_html}</div>
 
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Diagnostic settings coverage', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico', 'Cobertura de configura\u00e7\u00e3o de diagn\u00f3stico')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Diagnostic settings coverage', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico', 'Cobertura de configura\u00e7\u00e3o de diagn\u00f3stico')}{it('Percentage of resources sending diagnostic logs and metrics to a Log Analytics workspace or storage account.', 'Porcentaje de recursos que env\u00edan registros y m\u00e9tricas de diagn\u00f3stico a un workspace de Log Analytics o cuenta de almacenamiento.', 'Percentual de recursos que enviam logs e m\u00e9tricas de diagn\u00f3stico para um workspace do Log Analytics ou conta de armazenamento.')}</div>
             {diag_table}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Untagged resources', 'Recursos sin etiquetas', 'Recursos sem tags')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Untagged resources', 'Recursos sin etiquetas', 'Recursos sem tags')}{it('Resources missing required tags, which hinders cost allocation, ownership tracking and automation.', 'Recursos sin las etiquetas requeridas, lo que dificulta la asignaci\u00f3n de costos, el seguimiento de propietarios y la automatizaci\u00f3n.', 'Recursos sem as tags obrigat\u00f3rias, o que dificulta a aloca\u00e7\u00e3o de custos, o rastreamento de propriet\u00e1rios e a automa\u00e7\u00e3o.')}</div>
             {tags_table}
         </div>
         <div class="security-two-column">
@@ -3460,11 +3571,11 @@ class DashboardGenerator:
             <div class="security-panel"><h3>{bi('Advisor operational excellence recommendations', 'Recomendaciones de excelencia operativa de Advisor', 'Recomenda\u00e7\u00f5es de excel\u00eancia operacional do Advisor')}</h3>{recs_table}</div>
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}{it('How the operational excellence score is calculated, broken down by category and subcategory.', 'C\u00f3mo se calcula el puntaje de excelencia operativa, desglosado por categor\u00eda y subcategor\u00eda.', 'Como a pontua\u00e7\u00e3o de excel\u00eancia operacional \u00e9 calculada, detalhada por categoria e subcategoria.')}</div>
             {self._render_subcategory_table("Operational Excellence")}
         </div>
         <div class="section">
-            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}</div>
+            <div class="section-title" style="border-bottom-color: var(--cp-accent);">{bi('Action items', 'Elementos de acci\u00f3n', 'Itens de a\u00e7\u00e3o')}{it('Prioritized operational excellence actions, ranked by score impact.', 'Acciones de excelencia operativa priorizadas, ordenadas por impacto en el puntaje.', 'A\u00e7\u00f5es de excel\u00eancia operacional priorizadas, ordenadas pelo impacto na pontua\u00e7\u00e3o.')}</div>
             {self._render_actions_for_pillar("Operational Excellence")}
         </div>"""
 
@@ -3657,6 +3768,30 @@ class DashboardGenerator:
         total_subs = len(self.data.get("discovery", {}).get("Subscriptions", []) or self.data.get("governance", {}).get("Subscriptions", []))
         total_actions = len(action_items)
         critical_actions = len([a for a in action_items if a["severity"] in ("critical", "high")])
+
+        # Dashboard-wide subscription filter (checkbox bar shown under the tab strip, visible
+        # on every tab) - drives both the Cost tab's pivot (via its own checkboxes, kept in
+        # sync by initGlobalSubscriptionFilter()) and row-hiding on any other table across all
+        # tabs that carries a "Subscription" column.
+        all_sub_names = sorted({
+            s.get("name") for s in (
+                self.data.get("discovery", {}).get("Subscriptions", [])
+                or self.data.get("governance", {}).get("Subscriptions", [])
+            ) if s.get("name")
+        })
+        if len(all_sub_names) > 1:
+            global_sub_checks = "".join(
+                f'<label class="global-sub-check"><input type="checkbox" value="{escape(s)}" checked> {escape(s)}</label>'
+                for s in all_sub_names
+            )
+            global_sub_filter_html = f"""<div class="global-sub-filter-bar" id="globalSubFilterBar">
+    <span class="global-sub-filter-label">{bi('Filter by subscription', 'Filtrar por suscripci\u00f3n', 'Filtrar por assinatura')}:</span>
+    {global_sub_checks}
+    <button type="button" class="cost-pivot-selectall" data-mode="all">{bi("All", "Todas", "Todas")}</button>
+    <button type="button" class="cost-pivot-selectall" data-mode="none">{bi("None", "Ninguna", "Nenhuma")}</button>
+</div>"""
+        else:
+            global_sub_filter_html = ""
         
         # Build action items HTML
         actions_html = "".join(self._render_action_card(action, i, show_pillar=True) for i, action in enumerate(action_items, 1))
@@ -3843,6 +3978,77 @@ body {{
 .security-panel h3 {{ font-size: 14px; font-weight: 590; margin-bottom: 12px; }}
 .security-table-wrap {{ width: 100%; overflow-x: auto; }}
 .security-table-wrap table {{ min-width: 540px; }}
+
+/* Service x Month cost pivot (replaces a long flat Service/Month/Cost list) */
+.cost-pivot-toolbar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; font-size: 13px; }}
+.cost-pivot-toolbar-label {{ color: var(--cp-text-muted); font-weight: 600; }}
+.cost-pivot-sub-check {{
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--cp-border); background: var(--cp-surface); font-size: 12.5px; cursor: pointer;
+}}
+.cost-pivot-sub-check input {{ margin: 0; }}
+.cost-pivot-selectall {{
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--cp-border); background: transparent;
+    color: var(--cp-text-muted); font-size: 12.5px; cursor: pointer;
+}}
+.cost-pivot-selectall:hover {{ color: var(--cp-accent); border-color: var(--cp-accent); }}
+.cost-pivot-sub-badge {{
+    display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--cp-border); background: var(--cp-surface); font-size: 12.5px; font-weight: 600;
+}}
+
+/* Dashboard-wide subscription filter (under the tab strip, visible on every tab) */
+.global-sub-filter-bar {{
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md);
+    box-shadow: var(--cp-shadow); padding: 10px 20px; margin: 0 0 18px;
+}}
+.global-sub-filter-label {{ color: var(--cp-text-muted); font-size: 12.5px; font-weight: 700; }}
+.global-sub-check {{
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--cp-border); background: var(--cp-bg); font-size: 12.5px; cursor: pointer;
+}}
+.global-sub-check input {{ margin: 0; }}
+.cost-pivot-wrap {{ width: 100%; overflow-x: auto; }}
+.cost-pivot-wrap table {{ min-width: 540px; width: 100%; border-collapse: collapse; }}
+.cost-pivot-wrap th, .cost-pivot-wrap td {{ padding: 8px 12px; border-bottom: 1px solid var(--cp-border); text-align: left; }}
+.cost-pivot-wrap th.num, .cost-pivot-wrap td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+.cost-pivot-total-row td {{ font-weight: 700; background: var(--cp-bg); border-top: 2px solid var(--cp-border); }}
+
+/* Per-table filter toolbar (auto-injected by initTableFilters()) */
+.table-filter-bar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }}
+.table-filter-select, .table-filter-search {{
+    font-size: 12px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--cp-border);
+    background: var(--cp-surface); color: var(--cp-text); min-width: 130px;
+}}
+.table-filter-search {{ flex: 1 1 160px; min-width: 160px; }}
+.table-filter-count {{ font-size: 11px; color: var(--cp-text-muted); margin-left: auto; white-space: nowrap; }}
+.table-filter-empty {{ padding: 14px 0; font-size: 12px; color: var(--cp-text-muted); display: none; }}
+
+/* Azure-Portal-style info tooltip: small "i" circle, bubble only shown on hover/focus */
+.info-tip {{
+    display: inline-flex; align-items: center; justify-content: center; position: relative;
+    width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--cp-text-muted);
+    color: var(--cp-text-muted); font-size: 10px; font-weight: 700; font-style: italic;
+    margin-left: 8px; cursor: help; vertical-align: middle; flex: 0 0 auto;
+}}
+.info-tip:hover, .info-tip:focus {{ border-color: var(--cp-accent); color: var(--cp-accent); outline: none; }}
+.info-tip-bubble {{
+    position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
+    background: var(--cp-text); color: var(--cp-bg); padding: 8px 12px; border-radius: 8px;
+    font-size: 12px; font-weight: 400; font-style: normal; line-height: 1.4; white-space: normal;
+    width: max-content; max-width: 260px; text-align: left;
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity 0.15s var(--cp-ease), transform 0.15s var(--cp-ease); z-index: 20;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}}
+.info-tip-bubble::after {{
+    content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    border: 6px solid transparent; border-top-color: var(--cp-text);
+}}
+.info-tip:hover .info-tip-bubble, .info-tip:focus .info-tip-bubble {{
+    opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0);
+}}
 .empty-state {{ color: var(--cp-text-muted); font-size: 12px; padding: 16px 0; }}
 .source-status {{ display: inline-block; padding: 3px 10px; border-radius: 980px; font-size: 10px; font-weight: 700; }}
 .source-available, .source-nodata {{ background: rgba(48, 209, 88, 0.12); color: var(--cp-success); }}
@@ -4286,6 +4492,8 @@ body.lang-pt .i18n-pt {{ display: inline; }}
     <button id="governanceTab" class="view-tab" role="tab" aria-selected="false" aria-controls="governanceView" onclick="setDashboardView('governance')" type="button">{bi('Governance', 'Gobernanza', 'Governança')}</button>
 </div>
 
+{global_sub_filter_html}
+
 <main id="overviewView" class="dashboard-view" role="tabpanel" aria-labelledby="overviewTab">
 <!-- Score continuity since last scan -->
 {progress_banner_html}
@@ -4311,7 +4519,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 
 <!-- Score Methodology -->
 <div class="section">
-    <div class="section-title">📐 {bi("Score Methodology (Microsoft Advisor Score model)", "Metodolog\u00eda de Puntuaci\u00f3n (modelo de Azure Advisor Score)", "Metodologia de Pontuação (modelo do Azure Advisor Score)")}</div>
+    <div class="section-title">📐 {bi("Score Methodology (Microsoft Advisor Score model)", "Metodolog\u00eda de Puntuaci\u00f3n (modelo de Azure Advisor Score)", "Metodologia de Pontuação (modelo do Azure Advisor Score)")}{it("Explains how each pillar score (0-100) is calculated from Advisor recommendation subcategories and weights.", "Explica c\u00f3mo se calcula el puntaje de cada pilar (0-100) a partir de las subcategor\u00edas y pesos de las recomendaciones de Advisor.", "Explica como a pontuação de cada pilar (0-100) é calculada a partir das subcategorias e pesos das recomendações do Advisor.")}</div>
     <div class="methodology-note">
         {bi("Pillar scores follow the official", "Los puntajes de cada pilar siguen la f\u00f3rmula oficial de", "As pontuações de cada pilar seguem a fórmula oficial do")} <a href="https://learn.microsoft.com/en-us/azure/advisor/advisor-score#calculation-of-advisor-score" target="_blank">Azure Advisor Score</a>
         {bi(
@@ -4339,7 +4547,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 
 <!-- Recommended Azure Resources -->
 <div class="section resource-recommendations">
-    <div class="section-title security-title">{bi('Recommended Azure resources & services', 'Recursos y servicios de Azure recomendados', 'Recursos e serviços do Azure recomendados')}</div>
+    <div class="section-title security-title">{bi('Recommended Azure resources & services', 'Recursos y servicios de Azure recomendados', 'Recursos e serviços do Azure recomendados')}{it('Azure services and resources suggested based on gaps found across all pillars during discovery and analysis.', 'Servicios y recursos de Azure sugeridos en base a las brechas encontradas en todos los pilares durante la detecci\u00f3n y el an\u00e1lisis.', 'Serviços e recursos do Azure sugeridos com base nas lacunas encontradas em todos os pilares durante a descoberta e a an\u00e1lise.')}</div>
     <p class="resource-rec-intro">{bi('These suggestions are derived from all generated recommendations and action items. Validate architecture, licensing, and cost before deployment.', 'Estas sugerencias se derivan de todas las recomendaciones y elementos de acción generados. Valide la arquitectura, las licencias y el costo antes de implementar.', 'Estas sugestões são derivadas de todas as recomendações e itens de ação gerados. Valide a arquitetura, o licenciamento e o custo antes da implantação.')}</p>
     {self._render_azure_resource_recommendations()}
 </div>
@@ -4347,7 +4555,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 <!-- Action Items -->
 <div class="section">
     <div class="section-title-row">
-        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">🎯 {bi('Action Items', 'Elementos de Acci\u00f3n', 'Itens de Ação')} (<span id="actionItemsCount">{total_actions}</span>)</div>
+        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">🎯 {bi('Action Items', 'Elementos de Acci\u00f3n', 'Itens de Ação')} (<span id="actionItemsCount">{total_actions}</span>){it('Consolidated, prioritized list of action items across all pillars - add, resolve, or dismiss items directly from here.', 'Lista consolidada y priorizada de elementos de acci\u00f3n de todos los pilares: agrega, resuelve o descarta elementos directamente aqu\u00ed.', 'Lista consolidada e priorizada de itens de ação de todos os pilares - adicione, resolva ou descarte itens diretamente aqui.')}</div>
         <div class="action-toolbar">
             <button id="addActionBtn" class="btn-add-action" type="button">+ {bi('Add action item', 'Agregar elemento', 'Adicionar item')}</button>
             <button id="toggleDismissedBtn" class="btn-link" type="button"
@@ -4511,7 +4719,276 @@ function toggleTableRows(btn) {{
     var rows = wrap.querySelectorAll('.extra-row');
     for (var i = 0; i < rows.length; i++) {{ rows[i].hidden = !expanded; }}
 }}
+
+/* ---- Per-table filters: auto-detects categorical columns (Subscription, Resource Group,
+   Severity, etc.) in every rendered table and injects a dropdown per column plus a free-text
+   search box - no per-table Python changes needed, this works for any current/future table. */
+function initTableFilters() {{
+    // Hidden (non-active) tab panels have display:none, and under that condition
+    // .innerText stops respecting the nested .i18n-en/.i18n-es/.i18n-pt display:none
+    // rules in most browsers (falls back to concatenating all of them) - so headers/
+    // cells must be read with textContent + an explicit pick of the active language span.
+    var spanish = document.body.classList.contains('lang-es');
+    var portuguese = document.body.classList.contains('lang-pt');
+    var activeI18nClass = portuguese ? 'i18n-pt' : (spanish ? 'i18n-es' : 'i18n-en');
+    function visibleText(el) {{
+        var span = el.querySelector('.' + activeI18nClass);
+        return (span ? span.textContent : el.textContent).trim();
+    }}
+
+    var wraps = document.querySelectorAll('.security-table-wrap');
+    wraps.forEach(function(wrap) {{
+        var table = wrap.querySelector('table');
+        if (!table) return;
+        var theadRow = table.querySelector('thead tr');
+        var tbody = table.querySelector('tbody');
+        if (!theadRow || !tbody) return;
+        var rows = Array.prototype.slice.call(tbody.rows);
+        if (rows.length < 2) return;
+        var ths = Array.prototype.slice.call(theadRow.cells);
+        var colCount = ths.length;
+
+        var colValues = ths.map(function() {{ return {{}}; }});
+        rows.forEach(function(row) {{
+            for (var c = 0; c < colCount && c < row.cells.length; c++) {{
+                var txt = visibleText(row.cells[c]);
+                if (txt) colValues[c][txt] = true;
+            }}
+        }});
+
+        var filterCols = [];
+        var subColIndex = -1;
+        var subHeaderNames = ['Subscription', 'Suscripción', 'Assinatura'];
+        for (var c = 0; c < colCount; c++) {{
+            var headerLabel = visibleText(ths[c]);
+            if (subHeaderNames.indexOf(headerLabel) !== -1) {{ subColIndex = c; continue; }}
+            var distinct = Object.keys(colValues[c]);
+            if (distinct.length >= 2 && distinct.length <= 20 && distinct.length < rows.length * 0.6) {{
+                filterCols.push({{ index: c, label: headerLabel, values: distinct.sort() }});
+            }}
+        }}
+        if (filterCols.length === 0 && rows.length < 6) return;
+
+        var bar = document.createElement('div');
+        bar.className = 'table-filter-bar';
+        var selects = [];
+        filterCols.slice(0, 3).forEach(function(col) {{
+            var select = document.createElement('select');
+            select.className = 'table-filter-select';
+            select.setAttribute('data-col', String(col.index));
+            var allOpt = document.createElement('option');
+            allOpt.value = '';
+            allOpt.textContent = col.label + ' (' + col.values.length + ')';
+            select.appendChild(allOpt);
+            col.values.forEach(function(v) {{
+                var opt = document.createElement('option');
+                opt.value = v; opt.textContent = v;
+                select.appendChild(opt);
+            }});
+            select.addEventListener('change', applyFilters);
+            bar.appendChild(select);
+            selects.push(select);
+        }});
+
+        var search = document.createElement('input');
+        search.type = 'search';
+        search.className = 'table-filter-search';
+        search.placeholder = spanish ? 'Buscar en esta tabla...' : portuguese ? 'Pesquisar nesta tabela...' : 'Search this table...';
+        search.addEventListener('input', applyFilters);
+        bar.appendChild(search);
+
+        var countLabel = document.createElement('span');
+        countLabel.className = 'table-filter-count';
+        bar.appendChild(countLabel);
+        wrap.parentNode.insertBefore(bar, wrap);
+
+        var emptyMsg = document.createElement('div');
+        emptyMsg.className = 'table-filter-empty';
+        emptyMsg.textContent = spanish ? 'Ninguna fila coincide con los filtros.' : portuguese ? 'Nenhuma linha corresponde aos filtros.' : 'No rows match these filters.';
+        wrap.parentNode.insertBefore(emptyMsg, wrap.nextSibling);
+
+        function applyFilters() {{
+            var searchTerm = search.value.trim().toLowerCase();
+            var anySelectActive = selects.some(function(s) {{ return s.value !== ''; }});
+            var filtersActive = !!searchTerm || anySelectActive;
+            var visible = 0;
+            rows.forEach(function(row) {{
+                if (row.dataset.globalSubHidden === '1') {{ row.style.display = 'none'; return; }}
+                if (!filtersActive) {{
+                    row.style.display = '';
+                    if (row.classList.contains('extra-row')) {{ row.hidden = true; }} else {{ visible++; }}
+                    return;
+                }}
+                var matches = true;
+                for (var i = 0; i < selects.length; i++) {{
+                    var col = Number(selects[i].getAttribute('data-col'));
+                    var want = selects[i].value;
+                    if (want && row.cells[col] && visibleText(row.cells[col]) !== want) {{ matches = false; break; }}
+                }}
+                if (matches && searchTerm) {{ matches = row.textContent.toLowerCase().indexOf(searchTerm) !== -1; }}
+                if (matches) {{ row.hidden = false; row.style.display = ''; visible++; }} else {{ row.style.display = 'none'; }}
+            }});
+            countLabel.textContent = filtersActive ? (visible + ' / ' + rows.length) : '';
+            emptyMsg.style.display = (filtersActive && visible === 0) ? 'block' : 'none';
+            var moreBtn = wrap.querySelector('.table-more-note');
+            if (moreBtn) {{ moreBtn.style.display = filtersActive ? 'none' : ''; }}
+        }}
+        wrap.__applyLocalFilters = applyFilters;
+        wrap.__subColIndex = subColIndex;
+        applyFilters();
+    }});
+}}
+
+/* ---- Dashboard-wide subscription filter (#globalSubFilterBar, visible on every tab):
+   (1) syncs each Cost-tab pivot block's own checkboxes to match and re-renders it, and
+   (2) hides/shows rows in every OTHER table (any tab) that has a Subscription column,
+   combined with that table's own local filters via row.dataset.globalSubHidden. */
+function initGlobalSubscriptionFilter() {{
+    var bar = document.getElementById('globalSubFilterBar');
+    if (!bar) return;
+    var checks = Array.prototype.slice.call(bar.querySelectorAll('.global-sub-check input'));
+    if (checks.length === 0) return;
+
+    var spanish = document.body.classList.contains('lang-es');
+    var portuguese = document.body.classList.contains('lang-pt');
+    var activeI18nClass = portuguese ? 'i18n-pt' : (spanish ? 'i18n-es' : 'i18n-en');
+    function visibleText(el) {{
+        var span = el.querySelector('.' + activeI18nClass);
+        return (span ? span.textContent : el.textContent).trim();
+    }}
+    var subHeaderNames = ['Subscription', 'Suscripci\u00f3n', 'Assinatura'];
+
+    function apply() {{
+        var selected = {{}};
+        checks.forEach(function(c) {{ if (c.checked) selected[c.value] = true; }});
+
+        document.querySelectorAll('.cost-pivot-block').forEach(function(block) {{
+            block.querySelectorAll('.cost-pivot-sub-check input').forEach(function(c) {{
+                var want = !!selected[c.value];
+                if (c.checked !== want) {{
+                    c.checked = want;
+                    c.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+            }});
+        }});
+
+        document.querySelectorAll('.security-table-wrap').forEach(function(wrap) {{
+            var table = wrap.querySelector('table');
+            if (!table) return;
+            var theadRow = table.querySelector('thead tr');
+            var tbody = table.querySelector('tbody');
+            if (!theadRow || !tbody) return;
+            var subCol = (typeof wrap.__subColIndex === 'number') ? wrap.__subColIndex : -1;
+            if (subCol === -1) {{
+                var ths = Array.prototype.slice.call(theadRow.cells);
+                for (var i = 0; i < ths.length; i++) {{
+                    if (subHeaderNames.indexOf(visibleText(ths[i])) !== -1) {{ subCol = i; break; }}
+                }}
+            }}
+            if (subCol === -1) return;
+            var rows = Array.prototype.slice.call(tbody.rows);
+            rows.forEach(function(row) {{
+                if (!row.cells[subCol]) return;
+                var val = visibleText(row.cells[subCol]);
+                row.dataset.globalSubHidden = selected[val] ? '' : '1';
+            }});
+            if (wrap.__applyLocalFilters) {{
+                wrap.__applyLocalFilters();
+            }} else {{
+                rows.forEach(function(row) {{
+                    if (row.dataset.globalSubHidden === '1') {{ row.style.display = 'none'; }}
+                    else if (!row.classList.contains('extra-row')) {{ row.style.display = ''; }}
+                }});
+            }}
+        }});
+    }}
+
+    checks.forEach(function(c) {{ c.addEventListener('change', apply); }});
+    bar.querySelectorAll('.cost-pivot-selectall').forEach(function(btn) {{
+        btn.addEventListener('click', function() {{
+            var mode = btn.getAttribute('data-mode');
+            checks.forEach(function(c) {{ c.checked = (mode === 'all'); }});
+            apply();
+        }});
+    }});
+}}
 var DASHBOARD_VIEWS = ['overview', 'reliability', 'security', 'cost', 'operational', 'performance', 'governance'];
+function escapeHtml(s) {{
+    return String(s).replace(/[&<>"']/g, function(c) {{
+        return {{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }}[c];
+    }});
+}}
+function initCostPivotBlocks() {{
+    document.querySelectorAll('.cost-pivot-block[data-payload]').forEach(function(block) {{
+        if (block.dataset.wired) return;
+        block.dataset.wired = '1';
+        var payload;
+        try {{ payload = JSON.parse(block.getAttribute('data-payload')); }} catch (e) {{ return; }}
+        var target = block.querySelector('.cost-pivot-render-target');
+        var checks = Array.prototype.slice.call(block.querySelectorAll('.cost-pivot-sub-check input'));
+        var spanish = document.body.classList.contains('lang-es');
+        var portuguese = document.body.classList.contains('lang-pt');
+        var t = {{
+            service: portuguese ? 'Servi\u00e7o' : (spanish ? 'Servicio' : 'Service'),
+            total: 'Total',
+            noMatch: portuguese ? 'Nenhuma linha corresponde \u00e0 sele\u00e7\u00e3o.' : (spanish ? 'Ninguna fila coincide con la selecci\u00f3n.' : 'No rows match this selection.'),
+            more: portuguese ? 'mais' : (spanish ? 'm\u00e1s' : 'more'),
+            showLess: portuguese ? 'Mostrar menos' : (spanish ? 'Mostrar menos' : 'Show less'),
+        }};
+
+        function render() {{
+            var selected = checks.map(function(c) {{ return c.checked ? c.value : null; }}).filter(Boolean);
+            var rows = payload.rows.filter(function(r) {{ return selected.indexOf(r.sub) !== -1; }});
+            var totalsByService = {{}}, cellsByServiceMonth = {{}};
+            rows.forEach(function(r) {{
+                var key = r.svc + '|' + r.month;
+                cellsByServiceMonth[key] = (cellsByServiceMonth[key] || 0) + r.cost;
+                totalsByService[r.svc] = (totalsByService[r.svc] || 0) + r.cost;
+            }});
+            var services = Object.keys(totalsByService).sort(function(a, b) {{ return totalsByService[b] - totalsByService[a]; }});
+            if (services.length === 0) {{
+                target.innerHTML = '<p class="empty-state">' + t.noMatch + '</p>';
+                return;
+            }}
+            var header = '<th>' + t.service + '</th>' + payload.months.map(function(m) {{
+                return '<th class="num">' + escapeHtml(m) + '</th>';
+            }}).join('') + '<th class="num">' + t.total + '</th>';
+            var limit = 15;
+            var body = services.map(function(svc, i) {{
+                var cells = payload.months.map(function(m) {{
+                    return '<td class="num">' + Math.round(cellsByServiceMonth[svc + '|' + m] || 0).toLocaleString() + '</td>';
+                }}).join('');
+                var attr = i >= limit ? ' class="extra-row" hidden' : '';
+                return '<tr' + attr + '><td>' + escapeHtml(svc) + '</td>' + cells +
+                    '<td class="num"><strong>' + Math.round(totalsByService[svc]).toLocaleString() + '</strong></td></tr>';
+            }}).join('');
+            var monthTotals = payload.months.map(function(m) {{
+                return services.reduce(function(sum, svc) {{ return sum + (cellsByServiceMonth[svc + '|' + m] || 0); }}, 0);
+            }});
+            var grandTotal = services.reduce(function(sum, svc) {{ return sum + totalsByService[svc]; }}, 0);
+            var footer = '<tr class="cost-pivot-total-row"><td>' + t.total + '</td>' +
+                monthTotals.map(function(v) {{ return '<td class="num">' + Math.round(v).toLocaleString() + '</td>'; }}).join('') +
+                '<td class="num">' + Math.round(grandTotal).toLocaleString() + ' ' + escapeHtml(payload.currency || '') + '</td></tr>';
+            var more = '';
+            if (services.length > limit) {{
+                more = '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">' +
+                    '<span class="more-label">+ ' + (services.length - limit) + ' ' + t.more + '</span>' +
+                    '<span class="less-label">' + t.showLess + '</span></button>';
+            }}
+            target.innerHTML = '<div class="cost-pivot-wrap"><table><thead><tr>' + header + '</tr></thead><tbody>' + body + footer + '</tbody></table></div>' + more;
+        }}
+
+        checks.forEach(function(c) {{ c.addEventListener('change', render); }});
+        block.querySelectorAll('.cost-pivot-selectall').forEach(function(btn) {{
+            btn.addEventListener('click', function() {{
+                var mode = btn.getAttribute('data-mode');
+                checks.forEach(function(c) {{ c.checked = (mode === 'all'); }});
+                render();
+            }});
+        }});
+        render();
+    }});
+}}
 var currentDashboardView = 'overview';
 function moveTabThumb(view, skipAnimation) {{
     var thumb = document.getElementById('viewTabThumb');
@@ -4797,6 +5274,9 @@ if (toggleDismissedBtn) {{
     renderCustomItems();
     applyDismissedState();
     refreshDismissedToggleLabel();
+    initTableFilters();
+    initCostPivotBlocks();
+    initGlobalSubscriptionFilter();
 }})();
 </script>
 </body>
