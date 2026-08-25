@@ -250,40 +250,40 @@ resources
 | where type == "microsoft.compute/disks"
 | where isnull(managedBy) or managedBy == ""
 | extend diskSizeGB=properties.diskSizeGB, skuName=sku.name
-| project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName""")
+| project id, name, resourceGroup, subscriptionId, location, diskSizeGB, skuName""")
 
     orphaned_nics = run_query(credential, subscription_ids, """
 resources
 | where type == "microsoft.network/networkinterfaces"
 | where isnull(properties.virtualMachine) and isnull(properties.privateEndpoint)
-| project name, resourceGroup, subscriptionId, location""")
+| project id, name, resourceGroup, subscriptionId, location""")
 
     orphaned_pips = run_query(credential, subscription_ids, """
 resources
 | where type == "microsoft.network/publicipaddresses"
 | where isnull(properties.ipConfiguration) and isnull(properties.natGateway)
-| project name, resourceGroup, subscriptionId, location""")
+| project id, name, resourceGroup, subscriptionId, location""")
 
     orphaned_nsgs = run_query(credential, subscription_ids, """
 resources
 | where type == "microsoft.network/networksecuritygroups"
 | where isnull(properties.networkInterfaces) and isnull(properties.subnets)
-| project name, resourceGroup, subscriptionId, location""")
+| project id, name, resourceGroup, subscriptionId, location""")
 
     all_orphaned = []
     for d in orphaned_disks:
         all_orphaned.append({"Type": "Disk", "Name": d.get("name"), "ResourceGroup": d.get("resourceGroup"),
-                              "Subscription": d.get("subscriptionId"),
+                              "Subscription": d.get("subscriptionId"), "ResourceId": d.get("id"),
                               "Detail": f"{d.get('diskSizeGB')} GB ({d.get('skuName')})"})
     for n in orphaned_nics:
         all_orphaned.append({"Type": "NIC", "Name": n.get("name"), "ResourceGroup": n.get("resourceGroup"),
-                              "Subscription": n.get("subscriptionId"), "Detail": ""})
+                              "Subscription": n.get("subscriptionId"), "ResourceId": n.get("id"), "Detail": ""})
     for p in orphaned_pips:
         all_orphaned.append({"Type": "PublicIP", "Name": p.get("name"), "ResourceGroup": p.get("resourceGroup"),
-                              "Subscription": p.get("subscriptionId"), "Detail": ""})
+                              "Subscription": p.get("subscriptionId"), "ResourceId": p.get("id"), "Detail": ""})
     for s in orphaned_nsgs:
         all_orphaned.append({"Type": "NSG", "Name": s.get("name"), "ResourceGroup": s.get("resourceGroup"),
-                              "Subscription": s.get("subscriptionId"), "Detail": ""})
+                              "Subscription": s.get("subscriptionId"), "ResourceId": s.get("id"), "Detail": ""})
     export("OrphanedResources", all_orphaned)
 
     # ─── Network Topology ─────────────────────────────────────────────────
@@ -295,7 +295,7 @@ resources
          subnets = array_length(properties.subnets),
          peerings = array_length(properties.virtualNetworkPeerings),
          ddos = properties.enableDdosProtection
-| project name, resourceGroup, subscriptionId, location, addressSpace, subnets, peerings, ddos"""))
+| project id, name, resourceGroup, subscriptionId, location, addressSpace, subnets, peerings, ddos"""))
 
     # ─── Resource Locks ───────────────────────────────────────────────────
     print("  [12/12] Resource Locks...")

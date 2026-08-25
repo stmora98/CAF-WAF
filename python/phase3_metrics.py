@@ -106,7 +106,7 @@ resources
             "Name": vm.get("name"), "ResourceGroup": vm.get("resourceGroup"),
             "Subscription": sub_names.get(vm.get("subscriptionId"), vm.get("subscriptionId")), "Location": vm.get("location"),
             "VMSize": vm.get("vmSize"), "AvgCPU_Pct": cpu_avg, "MaxCPU_Pct": cpu_max,
-            "Assessment": sizing,
+            "Assessment": sizing, "ResourceId": vm.get("id"),
         })
     print()
     export("VM_RightSizing", vm_rows)
@@ -146,7 +146,7 @@ resources
             "Name": db.get("name"), "ResourceGroup": db.get("resourceGroup"),
             "Subscription": sub_names.get(db.get("subscriptionId"), db.get("subscriptionId")), "SKU": db.get("skuName"), "Tier": db.get("skuTier"),
             "MetricType": metric_type, "AvgUsage_Pct": usage_metric, "Storage_Pct": storage_used,
-            "Assessment": sizing,
+            "Assessment": sizing, "ResourceId": db.get("id"),
         })
     print()
     export("SQL_RightSizing", sql_rows)
@@ -199,7 +199,7 @@ resources
             "CurrentMonthlyCost": round(current_cost, 2) if current_cost is not None else None,
             "EstMonthlySavings": round(monthly_savings, 2) if monthly_savings is not None else None,
             "EstAnnualSavings": round(monthly_savings * 12, 2) if monthly_savings is not None else None,
-            "Currency": cost_currency,
+            "Currency": cost_currency, "ResourceId": plan.get("id"),
         })
     print()
     export("AppPlan_RightSizing", plan_rows)
@@ -230,7 +230,7 @@ resources
         storage_rows.append({
             "Name": sa.get("name"), "ResourceGroup": sa.get("resourceGroup"),
             "Subscription": sub_names.get(sa.get("subscriptionId"), sa.get("subscriptionId")), "SKU": sa.get("skuName"),
-            "AvgDailyTxns": transactions, "Availability_Pct": availability, "Assessment": activity,
+            "AvgDailyTxns": transactions, "Availability_Pct": availability, "Assessment": activity, "ResourceId": sa.get("id"),
         })
     print()
     export("Storage_Activity", storage_rows)
@@ -274,7 +274,7 @@ resources
             "Name": res.get("name"), "Type": res.get("type"), "ResourceGroup": res.get("resourceGroup"),
             "Subscription": res.get("subscriptionId"), "HasDiagnostics": has_diag,
             "Destinations": destinations_str,
-            "Gap": "OK" if has_diag else "No diagnostics configured",
+            "Gap": "OK" if has_diag else "No diagnostics configured", "ResourceId": res.get("id"),
         })
     print()
     export("DiagnosticsCoverage", diag_rows)

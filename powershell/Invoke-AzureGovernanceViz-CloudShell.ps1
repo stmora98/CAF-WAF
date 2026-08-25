@@ -350,31 +350,31 @@ resources
 | where type == "microsoft.compute/disks"
 | where isnull(managedBy) or managedBy == ""
 | extend diskSizeGB=properties.diskSizeGB, skuName=sku.name
-| project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName'
+| project id, name, resourceGroup, subscriptionId, location, diskSizeGB, skuName'
 
 $orphanedNICs = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/networkinterfaces"
 | where isnull(properties.virtualMachine) and isnull(properties.privateEndpoint)
-| project name, resourceGroup, subscriptionId, location'
+| project id, name, resourceGroup, subscriptionId, location'
 
 $orphanedPIPs = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/publicipaddresses"
 | where isnull(properties.ipConfiguration) and isnull(properties.natGateway)
-| project name, resourceGroup, subscriptionId, location'
+| project id, name, resourceGroup, subscriptionId, location'
 
 $orphanedNSGs = Invoke-ARGQuery -Query '
 resources
 | where type == "microsoft.network/networksecuritygroups"
 | where isnull(properties.networkInterfaces) and isnull(properties.subnets)
-| project name, resourceGroup, subscriptionId, location'
+| project id, name, resourceGroup, subscriptionId, location'
 
 $allOrphaned = @()
-foreach ($d in $orphanedDisks) { $allOrphaned += [PSCustomObject]@{ Type="Disk"; Name=$d.name; ResourceGroup=$d.resourceGroup; Subscription=$d.subscriptionId; Detail="$($d.diskSizeGB) GB ($($d.skuName))" } }
-foreach ($n in $orphanedNICs) { $allOrphaned += [PSCustomObject]@{ Type="NIC"; Name=$n.name; ResourceGroup=$n.resourceGroup; Subscription=$n.subscriptionId; Detail="" } }
-foreach ($p in $orphanedPIPs) { $allOrphaned += [PSCustomObject]@{ Type="PublicIP"; Name=$p.name; ResourceGroup=$p.resourceGroup; Subscription=$p.subscriptionId; Detail="" } }
-foreach ($s in $orphanedNSGs) { $allOrphaned += [PSCustomObject]@{ Type="NSG"; Name=$s.name; ResourceGroup=$s.resourceGroup; Subscription=$s.subscriptionId; Detail="" } }
+foreach ($d in $orphanedDisks) { $allOrphaned += [PSCustomObject]@{ Type="Disk"; Name=$d.name; ResourceGroup=$d.resourceGroup; Subscription=$d.subscriptionId; ResourceId=$d.id; Detail="$($d.diskSizeGB) GB ($($d.skuName))" } }
+foreach ($n in $orphanedNICs) { $allOrphaned += [PSCustomObject]@{ Type="NIC"; Name=$n.name; ResourceGroup=$n.resourceGroup; Subscription=$n.subscriptionId; ResourceId=$n.id; Detail="" } }
+foreach ($p in $orphanedPIPs) { $allOrphaned += [PSCustomObject]@{ Type="PublicIP"; Name=$p.name; ResourceGroup=$p.resourceGroup; Subscription=$p.subscriptionId; ResourceId=$p.id; Detail="" } }
+foreach ($s in $orphanedNSGs) { $allOrphaned += [PSCustomObject]@{ Type="NSG"; Name=$s.name; ResourceGroup=$s.resourceGroup; Subscription=$s.subscriptionId; ResourceId=$s.id; Detail="" } }
 Export-Sheet -Data $allOrphaned -Sheet "OrphanedResources"
 
 # ─── Network Topology ────────────────────────────────────────────────────────
@@ -387,7 +387,7 @@ resources
          subnets = array_length(properties.subnets),
          peerings = array_length(properties.virtualNetworkPeerings),
          ddos = properties.enableDdosProtection
-| project name, resourceGroup, subscriptionId, location, addressSpace, subnets, peerings, ddos'
+| project id, name, resourceGroup, subscriptionId, location, addressSpace, subnets, peerings, ddos'
 Export-Sheet -Data $vnets -Sheet "VNets"
 
 # ─── Resource Locks ──────────────────────────────────────────────────────────

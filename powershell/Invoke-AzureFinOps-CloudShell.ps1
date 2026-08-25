@@ -265,7 +265,7 @@ Invoke-GraphQuery -Sheet "UnattachedPublicIPs" -Query '
 resources
 | where type =~ "microsoft.network/publicipaddresses"
 | where isnull(properties.ipConfiguration)
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           sku = tostring(sku.name), allocationMethod = tostring(properties.publicIPAllocationMethod)'
 
 Invoke-GraphQuery -Sheet "StoppedVMs" -Query '
@@ -273,7 +273,7 @@ resources
 | where type =~ "microsoft.compute/virtualmachines"
 | extend powerState = tostring(properties.extended.instanceView.powerState.code)
 | where powerState == "PowerState/stopped"
-| project name, resourceGroup, subscriptionId, location, powerState,
+| project id, name, resourceGroup, subscriptionId, location, powerState,
           vmSize = tostring(properties.hardwareProfile.vmSize)'
 
 Invoke-GraphQuery -Sheet "BackendlessAppGateways" -Query '
@@ -281,7 +281,7 @@ resources
 | where type =~ "microsoft.network/applicationgateways"
 | extend backendPoolCount = array_length(properties.backendAddressPools)
 | where backendPoolCount == 0
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           sku = tostring(properties.sku.name)'
 
 Invoke-GraphQuery -Sheet "BackendlessLoadBalancers" -Query '
@@ -289,7 +289,7 @@ resources
 | where type =~ "microsoft.network/loadbalancers"
 | extend backendPoolCount = array_length(properties.backendAddressPools)
 | where backendPoolCount == 0
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           sku = tostring(sku.name)'
 
 Invoke-GraphQuery -Sheet "EmptySqlElasticPools" -Query '
@@ -315,7 +315,7 @@ resources
          enableAutoScaling = tobool(pool.enableAutoScaling),
          priority = tostring(pool.scaleSetPriority)
 | where enableAutoScaling == true and priority != "Spot"
-| project name, poolName, resourceGroup, subscriptionId, location'
+| project id, name, poolName, resourceGroup, subscriptionId, location'
 
 Invoke-GraphQuery -Sheet "VMsWithoutHybridBenefit" -Query '
 resources
@@ -323,7 +323,7 @@ resources
 | extend licenseType = tostring(properties.licenseType),
          osType = tostring(properties.storageProfile.osDisk.osType)
 | where osType == "Windows" and licenseType !in ("Windows_Server", "Windows_Client")
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           vmSize = tostring(properties.hardwareProfile.vmSize)'
 
 Invoke-GraphQuery -Sheet "SqlVMsWithoutHybridBenefit" -Query '
@@ -331,7 +331,7 @@ resources
 | where type =~ "microsoft.sqlvirtualmachine/sqlvirtualmachines"
 | extend licenseType = tostring(properties.sqlServerLicenseType)
 | where licenseType == "PAYG"
-| project name, resourceGroup, subscriptionId, location, licenseType'
+| project id, name, resourceGroup, subscriptionId, location, licenseType'
 
 Write-Host "`n✅ FinOps extended export complete!" -ForegroundColor Green
 Write-Host "📁 File: $outputFile" -ForegroundColor Cyan

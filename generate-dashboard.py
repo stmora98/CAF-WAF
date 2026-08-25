@@ -342,8 +342,9 @@ def _resource_link_attr(row: dict) -> str:
     resource_id = row.get("id") or row.get("Id") or row.get("ResourceId")
     if not resource_id or not str(resource_id).startswith("/"):
         return ""  # not a full ARM path (e.g. a bare GUID) - can't build a portal link from it
-    tip = bi("Double-click to open in Azure Portal", "Doble clic para abrir en Azure Portal", "Clique duas vezes para abrir no Portal do Azure")
-    return f' data-resource-id="{escape(str(resource_id))}" title="{tip}"'
+    # Plain text only - native title attributes can't hold bi()'s per-language <span> markup.
+    tip = "Double-click to open in Azure Portal / Doble clic para abrir en Azure Portal / Clique duas vezes para abrir no Portal do Azure"
+    return f' data-resource-id="{escape(str(resource_id))}" title="{escape(tip)}"'
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA READER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -745,7 +746,7 @@ class InsightEngine:
                 "description": "These VMs are not protected against datacenter failures. Consider migrating to zone-redundant deployments.",
                 "description_es": "Estas VMs no están protegidas contra fallas del centro de datos. Considere migrar a implementaciones con redundancia de zona.",
                 "description_pt": "Essas VMs não estão protegidas contra falhas de datacenter. Considere migrar para implantações com redundância de zona.",
-                "resources": [v.get("name", v.get("Name", "")) for v in vms_no_zone[:10]]
+                "resources": [{"name": v.get("name", v.get("Name", "")), "id": v.get("id")} for v in vms_no_zone[:10]]
             })
         
         # Check backup vaults
@@ -779,7 +780,7 @@ class InsightEngine:
                 "description": "Enable Azure DDoS Protection Standard for internet-facing workloads.",
                 "description_es": "Habilite Azure DDoS Protection Standard para cargas de trabajo expuestas a Internet.",
                 "description_pt": "Habilite o Azure DDoS Protection Standard para cargas de trabalho expostas à Internet.",
-                "resources": [v.get("name", v.get("Name", "")) for v in vnets_no_ddos[:10]]
+                "resources": [{"name": v.get("name", v.get("Name", "")), "id": v.get("id")} for v in vnets_no_ddos[:10]]
             })
         
         # Advisor HighAvailability recommendations
@@ -828,7 +829,7 @@ class InsightEngine:
                 "description": "Disable public blob access unless explicitly required. This is a common data exposure risk.",
                 "description_es": "Deshabilite el acceso público a blobs a menos que sea explícitamente necesario. Este es un riesgo común de exposición de datos.",
                 "description_pt": "Desabilite o acesso público a blobs, a menos que seja explicitamente necessário. Este é um risco comum de exposição de dados.",
-                "resources": [s.get("name", s.get("Name", "")) for s in public_storage[:10]]
+                "resources": [{"name": s.get("name", s.get("Name", "")), "id": s.get("id")} for s in public_storage[:10]]
             })
         
         # Key Vaults without purge protection
@@ -844,7 +845,7 @@ class InsightEngine:
                 "description": "Enable purge protection to prevent permanent deletion of secrets, keys, and certificates.",
                 "description_es": "Habilite la protección contra purga para evitar la eliminación permanente de secretos, claves y certificados.",
                 "description_pt": "Habilite a proteção contra exclusão definitiva para evitar a exclusão permanente de segredos, chaves e certificados.",
-                "resources": [k.get("name", k.get("Name", "")) for k in kv_no_purge[:10]]
+                "resources": [{"name": k.get("name", k.get("Name", "")), "id": k.get("id")} for k in kv_no_purge[:10]]
             })
         
         # Storage without TLS 1.2
@@ -859,7 +860,7 @@ class InsightEngine:
                 "description": "Enforce minimum TLS 1.2 for all storage accounts to prevent protocol downgrade attacks.",
                 "description_es": "Exija TLS 1.2 como mínimo en todas las cuentas de almacenamiento para evitar ataques de downgrade de protocolo.",
                 "description_pt": "Exija TLS 1.2 no mínimo em todas as contas de armazenamento para evitar ataques de downgrade de protocolo.",
-                "resources": [s.get("name", s.get("Name", "")) for s in old_tls[:10]]
+                "resources": [{"name": s.get("name", s.get("Name", "")), "id": s.get("id")} for s in old_tls[:10]]
             })
         
         # Security advisor recommendations (informational — already reflected in Secure Score)
@@ -929,7 +930,7 @@ class InsightEngine:
                 "description_es": "Priorice las recomendaciones de CSPM no saludables con severidad crítica o alta.",
                 "description_pt": "Priorize as recomendações de CSPM não saudáveis com severidade crítica ou alta.",
                 "resources": [
-                    recommendation.get("recommendationName", recommendation.get("affectedResourceId", ""))
+                    {"name": recommendation.get("recommendationName", recommendation.get("affectedResourceId", "")), "id": recommendation.get("affectedResourceId")}
                     for recommendation in severe_recommendations[:10]
                 ]
             })
@@ -1039,7 +1040,7 @@ class InsightEngine:
                 "description": "These resources incur costs but are not attached to any workload. Review and delete if unused.",
                 "description_es": "Estos recursos generan costos pero no están asociados a ninguna carga de trabajo. Revíselos y elimínelos si no se utilizan.",
                 "description_pt": "Esses recursos geram custos, mas não estão associados a nenhuma carga de trabalho. Revise e exclua se não forem utilizados.",
-                "resources": [o.get("Name", o.get("name", "")) for o in orphaned[:10]]
+                "resources": [{"name": o.get("Name", o.get("name", "")), "id": o.get("id") or o.get("ResourceId")} for o in orphaned[:10]]
             })
         
         # VMs that are deallocated (still paying for disks)
@@ -1062,7 +1063,7 @@ class InsightEngine:
                 "description": "Deallocated VMs still incur costs for attached disks and static IPs. Consider deleting if no longer needed.",
                 "description_es": "Las VMs desasignadas siguen generando costos por los discos e IPs estáticas asociadas. Considere eliminarlas si ya no son necesarias.",
                 "description_pt": "VMs desalocadas continuam gerando custos pelos discos e IPs estáticos associados. Considere excluí-las se não forem mais necessárias.",
-                "resources": [v.get("name", v.get("Name", "")) for v in dealloc_vms[:10]]
+                "resources": [{"name": v.get("name", v.get("Name", "")), "id": v.get("id")} for v in dealloc_vms[:10]]
             })
         
         # Right-sizing from metrics
@@ -1086,7 +1087,7 @@ class InsightEngine:
                 "description": "These VMs have <15% average CPU over 30 days. Consider downsizing or deallocating.",
                 "description_es": "Estas VMs tienen <15% de uso promedio de CPU en 30 días. Considere reducir su tamaño o desasignarlas.",
                 "description_pt": "Essas VMs têm menos de 15% de uso médio de CPU em 30 dias. Considere redimensionar ou desalocar.",
-                "resources": [f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)" for v in underutilized[:10]]
+                "resources": [{"name": f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)", "id": v.get("ResourceId")} for v in underutilized[:10]]
             })
         
         # SQL databases that are oversized or underutilized (DTU/CPU-based)
@@ -1110,7 +1111,7 @@ class InsightEngine:
                 "description": "These databases run well below their provisioned DTU/CPU tier over 30 days. Consider a lower SKU.",
                 "description_es": "Estas bases de datos operan muy por debajo de su nivel de DTU/CPU aprovisionado durante 30 días. Considere un SKU menor.",
                 "description_pt": "Esses bancos de dados operam bem abaixo do nível de DTU/CPU provisionado durante 30 dias. Considere um SKU menor.",
-                "resources": [f"{d.get('Name', '')} ({d.get('SKU', '')} @ {d.get('AvgUsage_Pct', '?')}% {d.get('MetricType', '')})" for d in sql_waste[:10]]
+                "resources": [{"name": f"{d.get('Name', '')} ({d.get('SKU', '')} @ {d.get('AvgUsage_Pct', '?')}% {d.get('MetricType', '')})", "id": d.get("ResourceId")} for d in sql_waste[:10]]
             })
 
         # App Service Plans that are idle or underutilized
@@ -1134,7 +1135,7 @@ class InsightEngine:
                 "description": "These plans run well below their provisioned CPU/memory over 30 days. Consider scaling down or consolidating apps.",
                 "description_es": "Estos planes operan muy por debajo de su CPU/memoria aprovisionada durante 30 días. Considere reducir su tamaño o consolidar aplicaciones.",
                 "description_pt": "Esses planos operam bem abaixo da CPU/memória provisionada durante 30 dias. Considere reduzir o tamanho ou consolidar aplicativos.",
-                "resources": [f"{p.get('Name', '')} ({p.get('SKU', '')} @ {p.get('AvgCPU_Pct', '?')}% CPU)" for p in plan_waste[:10]]
+                "resources": [{"name": f"{p.get('Name', '')} ({p.get('SKU', '')} @ {p.get('AvgCPU_Pct', '?')}% CPU)", "id": p.get("ResourceId")} for p in plan_waste[:10]]
             })
 
         # Storage accounts with zero/minimal activity
@@ -1158,7 +1159,7 @@ class InsightEngine:
                 "description": "These storage accounts had near-zero transactions over 30 days. Review for deletion or tier downgrade (e.g. to Archive).",
                 "description_es": "Estas cuentas de almacenamiento tuvieron transacciones casi nulas durante 30 días. Considere eliminarlas o cambiarlas a un nivel más económico (p. ej. Archive).",
                 "description_pt": "Essas contas de armazenamento tiveram transações quase nulas durante 30 dias. Considere excluí-las ou migrá-las para um nível mais econômico (ex.: Archive).",
-                "resources": [f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgDailyTxns', '?')} txns/day)" for s in storage_waste[:10]]
+                "resources": [{"name": f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgDailyTxns', '?')} txns/day)", "id": s.get("ResourceId")} for s in storage_waste[:10]]
             })
 
         # Cost recommendations from Advisor
@@ -1275,7 +1276,7 @@ class InsightEngine:
                     "description": "Configure diagnostic settings to send logs to Log Analytics for observability and troubleshooting.",
                     "description_es": "Configure ajustes de diagnóstico para enviar registros a Log Analytics para observabilidad y solución de problemas.",
                     "description_pt": "Configure as configurações de diagnóstico para enviar logs ao Log Analytics para observabilidade e solução de problemas.",
-                    "resources": [d.get("Name", d.get("name", "")) for d in no_diag[:10]]
+                    "resources": [{"name": d.get("Name", d.get("name", "")), "id": d.get("ResourceId")} for d in no_diag[:10]]
                 })
         
         # Tag coverage — computed from the per-resource `tags` field across Discovery inventory
@@ -1283,26 +1284,26 @@ class InsightEngine:
         TAGGABLE_SHEETS = ["VMs", "AppServices", "AKS", "VNets", "NSGs", "LoadBalancers",
                            "Firewalls", "PublicIPs", "Storage", "Databases", "KeyVaults"]
         discovery = self.data.get("discovery", {})
-        total_taggable, untagged_names = 0, []
+        total_taggable, untagged = 0, []
         for sheet in TAGGABLE_SHEETS:
             for r in discovery.get(sheet, []):
                 total_taggable += 1
                 tags = r.get("tags")
                 if not tags or str(tags).strip().lower() in ("", "none", "{}"):
-                    untagged_names.append(r.get("name", r.get("Name", "")))
-        if total_taggable > 0 and untagged_names:
-            pct_untagged = len(untagged_names) / total_taggable * 100
-            synthetic += [{"problem": "Resource has no tags configured", "impactedResource": n} for n in untagged_names]
+                    untagged.append({"name": r.get("name", r.get("Name", "")), "id": r.get("id")})
+        if total_taggable > 0 and untagged:
+            pct_untagged = len(untagged) / total_taggable * 100
+            synthetic += [{"problem": "Resource has no tags configured", "impactedResource": n["name"]} for n in untagged]
             self.action_items.append({
                 "pillar": "Operational Excellence",
                 "severity": "medium",
-                "title": f"{len(untagged_names)}/{total_taggable} resources have no tags ({pct_untagged:.0f}%)",
-                "title_es": f"{len(untagged_names)}/{total_taggable} recursos no tienen etiquetas ({pct_untagged:.0f}%)",
-                "title_pt": f"{len(untagged_names)}/{total_taggable} recursos não têm tags ({pct_untagged:.0f}%)",
+                "title": f"{len(untagged)}/{total_taggable} resources have no tags ({pct_untagged:.0f}%)",
+                "title_es": f"{len(untagged)}/{total_taggable} recursos no tienen etiquetas ({pct_untagged:.0f}%)",
+                "title_pt": f"{len(untagged)}/{total_taggable} recursos não têm tags ({pct_untagged:.0f}%)",
                 "description": "Implement a tagging strategy (Owner, CostCenter, Environment, Application) for governance and cost allocation.",
                 "description_es": "Implemente una estrategia de etiquetado (Owner, CostCenter, Environment, Application) para gobernanza y asignación de costos.",
                 "description_pt": "Implemente uma estratégia de tags (Owner, CostCenter, Environment, Application) para governança e alocação de custos.",
-                "resources": untagged_names[:10]
+                "resources": untagged[:10]
             })
         
         # Resource locks (protects against accidental delete/modify of critical resources)
@@ -1373,7 +1374,7 @@ class InsightEngine:
                 "description": "These VMs are consistently at high CPU usage. Consider scaling up or scaling out.",
                 "description_es": "Estas VMs presentan un uso de CPU consistentemente alto. Considere escalar verticalmente u horizontalmente.",
                 "description_pt": "Essas VMs apresentam uso de CPU consistentemente alto. Considere escalar verticalmente ou horizontalmente.",
-                "resources": [f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)" for v in saturated[:10]]
+                "resources": [{"name": f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)", "id": v.get("ResourceId")} for v in saturated[:10]]
             })
         
         # Saturated SQL
@@ -1391,7 +1392,7 @@ class InsightEngine:
                 "description": "These databases are consistently at high utilization. Consider scaling up the tier.",
                 "description_es": "Estas bases de datos presentan una utilización consistentemente alta. Considere aumentar el nivel de servicio.",
                 "description_pt": "Esses bancos de dados apresentam utilização consistentemente alta. Considere aumentar o nível de serviço.",
-                "resources": [f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgUsage_Pct', '?')}%)" for s in saturated_sql[:10]]
+                "resources": [{"name": f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgUsage_Pct', '?')}%)", "id": s.get("ResourceId")} for s in saturated_sql[:10]]
             })
         
         # Performance advisor recommendations
@@ -3150,7 +3151,18 @@ class DashboardGenerator:
         color = DashboardConfig.SEVERITY_COLORS.get(action["severity"], "var(--cp-text-muted)")
         resources_html = ""
         if action.get("resources"):
-            resources_html = "<ul class='resource-list'>" + "".join(f"<li>{r}</li>" for r in action["resources"] if r) + "</ul>"
+            items = []
+            for r in action["resources"]:
+                if not r:
+                    continue
+                if isinstance(r, dict):
+                    name = escape(str(r.get("name", "")))
+                    link_attr = _resource_link_attr({"id": r.get("id")}) if r.get("id") else ""
+                else:
+                    name = escape(str(r))
+                    link_attr = ""
+                items.append(f"<li{link_attr}>{name}</li>")
+            resources_html = "<ul class='resource-list'>" + "".join(items) + "</ul>"
         severity_badge = bi(str(action['severity']).upper(), str(SEVERITY_ES.get(action['severity'], action['severity'].upper())), str(SEVERITY_PT.get(action['severity'], action['severity'].upper())))
         pillar_tag_html = ""
         if show_pillar:
@@ -4384,6 +4396,8 @@ body {{
     font-size: 11px; color: var(--cp-text-muted); max-height: 120px; overflow-y: auto;
 }}
 .resource-list li {{ margin: 2px 0; }}
+.resource-list li[data-resource-id] {{ cursor: pointer; }}
+.resource-list li[data-resource-id]:hover {{ color: var(--cp-link); text-decoration: underline; }}
 
 /* Action item toolbar / add form / dismiss */
 .section-title-row {{ display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid var(--cp-accent); }}
@@ -4738,12 +4752,13 @@ function toggleTableRows(btn) {{
     for (var i = 0; i < rows.length; i++) {{ rows[i].hidden = !expanded; }}
 }}
 
-/* Double-click any table row carrying a data-resource-id (ARM resource id) to open it
-   directly in the Azure Portal. Single delegated listener - works for any current/future table. */
+/* Double-click any element carrying a data-resource-id (ARM resource id) to open it
+   directly in the Azure Portal. Single delegated listener - works for table rows AND
+   action-item resource-list entries, current or future. */
 document.addEventListener('dblclick', function(e) {{
-    var row = e.target.closest('tr[data-resource-id]');
-    if (!row) return;
-    var id = row.getAttribute('data-resource-id');
+    var el = e.target.closest('[data-resource-id]');
+    if (!el) return;
+    var id = el.getAttribute('data-resource-id');
     if (!id) return;
     window.open('https://portal.azure.com/#resource' + id + '/overview', '_blank', 'noopener');
 }});

@@ -203,6 +203,7 @@ foreach ($vm in $vms) {
         AvgCPU_Pct    = $cpuAvg
         MaxCPU_Pct    = $cpuMax
         Assessment    = $sizing
+        ResourceId    = $vm.id
     }
 }
 Write-Progress -Activity "Querying VM metrics" -Completed
@@ -248,6 +249,7 @@ foreach ($db in $sqlDbs) {
         AvgUsage_Pct  = $usageMetric
         Storage_Pct   = $storageUsed
         Assessment    = $sizing
+        ResourceId    = $db.id
     }
 }
 Write-Progress -Activity "Querying SQL metrics" -Completed
@@ -307,6 +309,7 @@ foreach ($plan in $plans) {
         EstMonthlySavings    = $monthlySavings
         EstAnnualSavings     = $(if ($null -ne $monthlySavings) { [math]::Round($monthlySavings * 12, 2) } else { $null })
         Currency             = $costCurrency
+        ResourceId           = $plan.id
     }
 }
 Write-Progress -Activity "Querying App Plan metrics" -Completed
@@ -343,6 +346,7 @@ foreach ($sa in $storageAccounts) {
         AvgDailyTxns     = $transactions
         Availability_Pct = $availability
         Assessment       = $activity
+        ResourceId       = $sa.id
     }
 }
 Write-Progress -Activity "Querying Storage metrics" -Completed
@@ -405,6 +409,7 @@ foreach ($res in $diagCoverage) {
         HasDiagnostics = $hasDiag
         Destinations   = $destinations
         Gap            = if (-not $hasDiag) { "No diagnostics configured" } else { "OK" }
+        ResourceId     = $res.id
     }
 }
 Write-Progress -Activity "Checking Diagnostic Settings" -Completed

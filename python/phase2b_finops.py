@@ -176,7 +176,7 @@ def run(credential=None, subscription_ids=None) -> str:
 resources
 | where type =~ "microsoft.network/publicipaddresses"
 | where isnull(properties.ipConfiguration)
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           sku = tostring(sku.name), allocationMethod = tostring(properties.publicIPAllocationMethod)""")
 
     q("StoppedVMs", """
@@ -184,7 +184,7 @@ resources
 | where type =~ "microsoft.compute/virtualmachines"
 | extend powerState = tostring(properties.extended.instanceView.powerState.code)
 | where powerState == "PowerState/stopped"
-| project name, resourceGroup, subscriptionId, location, powerState,
+| project id, name, resourceGroup, subscriptionId, location, powerState,
           vmSize = tostring(properties.hardwareProfile.vmSize)""")
 
     q("BackendlessAppGateways", """
@@ -192,7 +192,7 @@ resources
 | where type =~ "microsoft.network/applicationgateways"
 | extend backendPoolCount = array_length(properties.backendAddressPools)
 | where backendPoolCount == 0
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           sku = tostring(properties.sku.name)""")
 
     q("BackendlessLoadBalancers", """
@@ -200,7 +200,7 @@ resources
 | where type =~ "microsoft.network/loadbalancers"
 | extend backendPoolCount = array_length(properties.backendAddressPools)
 | where backendPoolCount == 0
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           sku = tostring(sku.name)""")
 
     q("EmptySqlElasticPools", """
@@ -226,7 +226,7 @@ resources
          enableAutoScaling = tobool(pool.enableAutoScaling),
          priority = tostring(pool.scaleSetPriority)
 | where enableAutoScaling == true and priority != "Spot"
-| project name, poolName, resourceGroup, subscriptionId, location""")
+| project id, name, poolName, resourceGroup, subscriptionId, location""")
 
     q("VMsWithoutHybridBenefit", """
 resources
@@ -234,7 +234,7 @@ resources
 | extend licenseType = tostring(properties.licenseType),
          osType = tostring(properties.storageProfile.osDisk.osType)
 | where osType == "Windows" and licenseType !in ("Windows_Server", "Windows_Client")
-| project name, resourceGroup, subscriptionId, location,
+| project id, name, resourceGroup, subscriptionId, location,
           vmSize = tostring(properties.hardwareProfile.vmSize)""")
 
     q("SqlVMsWithoutHybridBenefit", """
@@ -242,7 +242,7 @@ resources
 | where type =~ "microsoft.sqlvirtualmachine/sqlvirtualmachines"
 | extend licenseType = tostring(properties.sqlServerLicenseType)
 | where licenseType == "PAYG"
-| project name, resourceGroup, subscriptionId, location, licenseType""")
+| project id, name, resourceGroup, subscriptionId, location, licenseType""")
 
     save(wb, output_path)
     print("\nFinOps extended export complete!")
