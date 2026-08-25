@@ -71,13 +71,13 @@ Write-Host "Querying environment..." -ForegroundColor Green
 Run-Query -Sheet "Subscriptions" -Query '
 resourcecontainers
 | where type == "microsoft.resources/subscriptions"
-| project subscriptionId, name, state=properties.state, tags
+| project id, subscriptionId, name, state=properties.state, tags
 | order by name asc'
 
 Run-Query -Sheet "ResourceGroups" -Query '
 resourcecontainers
 | where type == "microsoft.resources/subscriptions/resourcegroups"
-| project name, location, subscriptionId, tags, provisioningState=properties.provisioningState
+| project id, name, location, subscriptionId, tags, provisioningState=properties.provisioningState
 | order by subscriptionId asc, name asc'
 
 Run-Query -Sheet "ResourceSummary" -Query '
@@ -93,14 +93,14 @@ resources
          osSku = properties.storageProfile.imageReference.sku,
          powerState = properties.extended.instanceView.powerState.displayStatus,
          zone = tostring(zones[0])
-| project name, resourceGroup, subscriptionId, location, vmSize, osType, osSku, powerState, zone, tags
+| project id, name, resourceGroup, subscriptionId, location, vmSize, osType, osSku, powerState, zone, tags
 | order by name asc'
 
 Run-Query -Sheet "AppServices" -Query '
 resources
 | where type in ("microsoft.web/sites", "microsoft.web/serverfarms")
 | extend kind_=kind, state=properties.state, httpsOnly=properties.httpsOnly
-| project name, type, resourceGroup, subscriptionId, location, kind_, state, httpsOnly, tags
+| project id, name, type, resourceGroup, subscriptionId, location, kind_, state, httpsOnly, tags
 | order by type asc, name asc'
 
 Run-Query -Sheet "AKS" -Query '
@@ -111,7 +111,7 @@ resources
          nodeVmSize = properties.agentPoolProfiles[0].vmSize,
          networkPlugin = properties.networkProfile.networkPlugin,
          tier = sku.tier
-| project name, resourceGroup, subscriptionId, location, k8sVersion, nodeCount, nodeVmSize, networkPlugin, tier, tags
+| project id, name, resourceGroup, subscriptionId, location, k8sVersion, nodeCount, nodeVmSize, networkPlugin, tier, tags
 | order by name asc'
 
 Run-Query -Sheet "VNets" -Query '
@@ -120,7 +120,7 @@ resources
 | extend addressSpace = tostring(properties.addressSpace.addressPrefixes),
          subnets = array_length(properties.subnets),
          ddosProtection = properties.enableDdosProtection
-| project name, resourceGroup, subscriptionId, location, addressSpace, subnets, ddosProtection, tags
+| project id, name, resourceGroup, subscriptionId, location, addressSpace, subnets, ddosProtection, tags
 | order by name asc'
 
 Run-Query -Sheet "NSGs" -Query '
@@ -129,7 +129,7 @@ resources
 | extend rules = array_length(properties.securityRules),
          associatedSubnets = array_length(properties.subnets),
          associatedNICs = array_length(properties.networkInterfaces)
-| project name, resourceGroup, subscriptionId, location, rules, associatedSubnets, associatedNICs, tags
+| project id, name, resourceGroup, subscriptionId, location, rules, associatedSubnets, associatedNICs, tags
 | order by name asc'
 
 Run-Query -Sheet "LoadBalancers" -Query '
@@ -139,7 +139,7 @@ resources
                  "microsoft.network/frontdoors",
                  "microsoft.cdn/profiles")
 | extend skuName = sku.name, skuTier = sku.tier
-| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, skuTier, tags
 | order by type asc, name asc'
 
 Run-Query -Sheet "Firewalls" -Query '
@@ -148,7 +148,7 @@ resources
                  "microsoft.network/firewallpolicies",
                  "microsoft.network/applicationgatewaywebapplicationfirewallpolicies")
 | extend skuName = sku.name, skuTier = sku.tier, threatIntel = properties.threatIntelMode
-| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, threatIntel, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, skuTier, threatIntel, tags
 | order by type asc, name asc'
 
 Run-Query -Sheet "PrivateEndpoints" -Query '
@@ -156,7 +156,7 @@ resources
 | where type == "microsoft.network/privateendpoints"
 | extend target = tostring(properties.privateLinkServiceConnections[0].properties.privateLinkServiceId),
          status = properties.privateLinkServiceConnections[0].properties.privateLinkServiceConnectionState.status
-| project name, resourceGroup, subscriptionId, location, target, status, tags
+| project id, name, resourceGroup, subscriptionId, location, target, status, tags
 | order by name asc'
 
 Run-Query -Sheet "PublicIPs" -Query '
@@ -166,14 +166,14 @@ resources
          allocation = properties.publicIPAllocationMethod,
          skuName = sku.name,
          associatedTo = coalesce(tostring(properties.ipConfiguration.id), "Unassociated")
-| project name, resourceGroup, subscriptionId, location, ip, allocation, skuName, associatedTo, tags
+| project id, name, resourceGroup, subscriptionId, location, ip, allocation, skuName, associatedTo, tags
 | order by name asc'
 
 Run-Query -Sheet "DNS" -Query '
 resources
 | where type in ("microsoft.network/dnszones", "microsoft.network/privatednszones")
 | extend recordSets = properties.numberOfRecordSets
-| project name, type, resourceGroup, subscriptionId, location, recordSets, tags
+| project id, name, type, resourceGroup, subscriptionId, location, recordSets, tags
 | order by type asc, name asc'
 
 Run-Query -Sheet "Storage" -Query '
@@ -184,7 +184,7 @@ resources
          tlsVersion = properties.minimumTlsVersion,
          networkAccess = properties.networkAcls.defaultAction,
          publicBlob = properties.allowBlobPublicAccess
-| project name, resourceGroup, subscriptionId, location, skuName, kind_, httpsOnly, tlsVersion, networkAccess, publicBlob, tags
+| project id, name, resourceGroup, subscriptionId, location, skuName, kind_, httpsOnly, tlsVersion, networkAccess, publicBlob, tags
 | order by name asc'
 
 Run-Query -Sheet "Databases" -Query '
@@ -196,7 +196,7 @@ resources
                  "microsoft.documentdb/databaseaccounts",
                  "microsoft.cache/redis")
 | extend skuName=sku.name, skuTier=sku.tier, skuCapacity=sku.capacity
-| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, skuCapacity, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, skuTier, skuCapacity, tags
 | order by type asc, name asc'
 
 $keyVaultList = Run-Query -Sheet "KeyVaults" -Query '
@@ -207,7 +207,7 @@ resources
          purgeProtection=properties.enablePurgeProtection,
          rbac=properties.enableRbacAuthorization,
          networkAccess=properties.networkAcls.defaultAction
-| project name, resourceGroup, subscriptionId, location, sku_, softDelete, purgeProtection, rbac, networkAccess, tags
+| project id, name, resourceGroup, subscriptionId, location, sku_, softDelete, purgeProtection, rbac, networkAccess, tags
 | order by name asc'
 
 # ─── Key Vault secret/certificate expiration (data-plane, needs Key Vault Get permission per vault) ──
@@ -257,7 +257,7 @@ Write-Host "  [KeyVaultExpirations] $($kvExpirationRows.Count) rows" -Foreground
 Run-Query -Sheet "ManagedIdentities" -Query '
 resources
 | where type == "microsoft.managedidentity/userassignedidentities"
-| project name, resourceGroup, subscriptionId, location, tags
+| project id, name, resourceGroup, subscriptionId, location, tags
 | order by name asc'
 
 Run-Query -Sheet "Monitoring" -Query '
@@ -268,7 +268,7 @@ resources
                  "microsoft.insights/metricalerts",
                  "microsoft.insights/actiongroups")
 | extend skuName=sku.name, retention=properties.retentionInDays
-| project name, type, resourceGroup, subscriptionId, location, skuName, retention, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, retention, tags
 | order by type asc, name asc'
 
 Run-Query -Sheet "PolicyAssignments" -Query '
@@ -278,14 +278,14 @@ policyresources
          enforcement=tostring(properties.enforcementMode),
          definition=tostring(properties.policyDefinitionId),
          scope_=tostring(properties.scope)
-| project name, displayName, enforcement, definition, scope_, subscriptionId
+| project id, name, displayName, enforcement, definition, scope_, subscriptionId
 | order by displayName asc'
 
 Run-Query -Sheet "BackupVaults" -Query '
 resources
 | where type in ("microsoft.recoveryservices/vaults", "microsoft.dataprotection/backupvaults")
 | extend skuName=sku.name, redundancy=properties.storageSettings[0].type
-| project name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
 | order by type asc, name asc'
 
 Run-Query -Sheet "BackupProtectedItems" -Query '
@@ -298,7 +298,7 @@ resources
          policyName=tostring(properties.policyName),
          protectedItemType=tostring(properties.protectedItemType),
          workloadType=tostring(properties.workloadType)
-| project friendlyName, protectionStatus, lastBackupStatus, lastBackupTime, policyName, protectedItemType, workloadType, resourceGroup, subscriptionId
+| project id, friendlyName, protectionStatus, lastBackupStatus, lastBackupTime, policyName, protectedItemType, workloadType, resourceGroup, subscriptionId
 | order by protectionStatus asc'
 
 Run-Query -Sheet "ResourceHealthEvents" -Query '
@@ -311,7 +311,7 @@ resources
          level=tostring(properties.level),
          impactStartTime=tostring(properties.impactStartTime),
          impactMitigationTime=tostring(properties.impactMitigationTime)
-| project title_, eventType, status, level, impactStartTime, impactMitigationTime, summary, subscriptionId
+| project id, title_, eventType, status, level, impactStartTime, impactMitigationTime, summary, subscriptionId
 | order by impactStartTime desc'
 
 Run-Query -Sheet "UnattachedDisks" -Query '
@@ -319,7 +319,7 @@ resources
 | where type == "microsoft.compute/disks"
 | where isnull(managedBy) or managedBy == ""
 | extend diskSizeGB=toint(properties.diskSizeGB), skuName=tostring(sku.name), diskState=tostring(properties.diskState)
-| project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
+| project id, name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
 | order by diskSizeGB desc'
 
 Run-Query -Sheet "DeallocatedVMs" -Query '
@@ -327,7 +327,7 @@ resources
 | where type == "microsoft.compute/virtualmachines"
 | where properties.extended.instanceView.powerState.displayStatus == "VM deallocated"
 | extend vmSize = properties.hardwareProfile.vmSize
-| project name, resourceGroup, subscriptionId, location, vmSize, tags
+| project id, name, resourceGroup, subscriptionId, location, vmSize, tags
 | order by name asc'
 
 Run-Query -Sheet "AdvisorRecommendations" -Query '
@@ -338,7 +338,7 @@ advisorresources
          impactedField=tostring(properties.impactedField),
          impactedValue=tostring(properties.impactedValue),
          description=tostring(properties.shortDescription.solution)
-| project category, impact, impactedField, impactedValue, description, subscriptionId
+| project id, category, impact, impactedField, impactedValue, description, subscriptionId
 | order by category asc, impact desc'
 
 # ─── Done ────────────────────────────────────────────────────────────────────

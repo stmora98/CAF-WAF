@@ -187,7 +187,7 @@ Write-Host "[1/14] Subscriptions Overview" -ForegroundColor Green
 $subscriptions = Invoke-ResourceGraphQuery -Description "Subscriptions" -Query @"
 resourcecontainers
 | where type == 'microsoft.resources/subscriptions'
-| project subscriptionId, name, properties.state, tags
+| project id, subscriptionId, name, properties.state, tags
 | order by name asc
 "@
 
@@ -202,7 +202,7 @@ Write-Host "[2/14] Resource Groups" -ForegroundColor Green
 $resourceGroups = Invoke-ResourceGraphQuery -Description "Resource Groups" -Query @"
 resourcecontainers
 | where type == 'microsoft.resources/subscriptions/resourcegroups'
-| project name, location, subscriptionId, tags, properties.provisioningState
+| project id, name, location, subscriptionId, tags, properties.provisioningState
 | order by subscriptionId asc, name asc
 "@
 
@@ -237,7 +237,7 @@ resources
          osSku = properties.storageProfile.imageReference.sku,
          powerState = properties.extended.instanceView.powerState.displayStatus,
          availabilityZone = tostring(zones[0])
-| project name, resourceGroup, subscriptionId, location, vmSize, osType,
+| project id, name, resourceGroup, subscriptionId, location, vmSize, osType,
           osPublisher, osSku, powerState, availabilityZone, tags
 | order by subscriptionId asc, name asc
 "@
@@ -252,7 +252,7 @@ resources
          state = properties.state,
          httpsOnly = properties.httpsOnly,
          reserved = properties.reserved
-| project name, type, resourceGroup, subscriptionId, location, kind_,
+| project id, name, type, resourceGroup, subscriptionId, location, kind_,
           sku, state, httpsOnly, reserved, tags
 | order by type asc, name asc
 "@
@@ -267,7 +267,7 @@ resources
          nodeVmSize = properties.agentPoolProfiles[0].vmSize,
          networkPlugin = properties.networkProfile.networkPlugin,
          tier = sku.tier
-| project name, resourceGroup, subscriptionId, location, kubernetesVersion,
+| project id, name, resourceGroup, subscriptionId, location, kubernetesVersion,
           nodeCount, nodeVmSize, networkPlugin, tier, tags
 | order by name asc
 "@
@@ -286,7 +286,7 @@ resources
 | extend addressSpace = tostring(properties.addressSpace.addressPrefixes),
          subnetsCount = array_length(properties.subnets),
          enableDdosProtection = properties.enableDdosProtection
-| project name, resourceGroup, subscriptionId, location, addressSpace,
+| project id, name, resourceGroup, subscriptionId, location, addressSpace,
           subnetsCount, enableDdosProtection, tags
 | order by name asc
 "@
@@ -299,7 +299,7 @@ resources
 | extend rulesCount = array_length(properties.securityRules),
          subnets = array_length(properties.subnets),
          nics = array_length(properties.networkInterfaces)
-| project name, resourceGroup, subscriptionId, location, rulesCount, subnets, nics, tags
+| project id, name, resourceGroup, subscriptionId, location, rulesCount, subnets, nics, tags
 | order by name asc
 "@
 
@@ -312,7 +312,7 @@ resources
                  'microsoft.network/frontdoors',
                  'microsoft.cdn/profiles')
 | extend skuName = sku.name, skuTier = sku.tier
-| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, skuTier, tags
 | order by type asc, name asc
 "@
 
@@ -325,7 +325,7 @@ resources
                  'microsoft.network/applicationgatewaywebapplicationfirewallpolicies')
 | extend skuName = sku.name, skuTier = sku.tier,
          threatIntelMode = properties.threatIntelMode
-| project name, type, resourceGroup, subscriptionId, location, skuName, skuTier,
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, skuTier,
           threatIntelMode, tags
 | order by type asc, name asc
 "@
@@ -337,7 +337,7 @@ resources
 | where type == 'microsoft.network/privateendpoints'
 | extend targetResource = tostring(properties.privateLinkServiceConnections[0].properties.privateLinkServiceId),
          connectionStatus = properties.privateLinkServiceConnections[0].properties.privateLinkServiceConnectionState.status
-| project name, resourceGroup, subscriptionId, location, targetResource, connectionStatus, tags
+| project id, name, resourceGroup, subscriptionId, location, targetResource, connectionStatus, tags
 | order by name asc
 "@
 
@@ -359,7 +359,7 @@ resources
          networkDefaultAction = properties.networkAcls.defaultAction,
          allowBlobPublicAccess = properties.allowBlobPublicAccess,
          replication = sku.name
-| project name, resourceGroup, subscriptionId, location, skuName, kind_,
+| project id, name, resourceGroup, subscriptionId, location, skuName, kind_,
           httpsOnly, minimumTlsVersion, networkDefaultAction,
           allowBlobPublicAccess, tags
 | order by name asc
@@ -384,7 +384,7 @@ resources
 | extend skuName = sku.name,
          skuTier = sku.tier,
          skuCapacity = sku.capacity
-| project name, type, resourceGroup, subscriptionId, location,
+| project id, name, type, resourceGroup, subscriptionId, location,
           skuName, skuTier, skuCapacity, tags
 | order by type asc, name asc
 "@
@@ -405,7 +405,7 @@ resources
          enablePurgeProtection = properties.enablePurgeProtection,
          enableRbac = properties.enableRbacAuthorization,
          networkDefaultAction = properties.networkAcls.defaultAction
-| project name, resourceGroup, subscriptionId, location, skuName,
+| project id, name, resourceGroup, subscriptionId, location, skuName,
           enableSoftDelete, enablePurgeProtection, enableRbac,
           networkDefaultAction, tags
 | order by name asc
@@ -416,7 +416,7 @@ Export-ToExcel -Data $keyVaults -WorksheetName "KeyVaults"
 $managedIdentities = Invoke-ResourceGraphQuery -Description "Managed Identities" -Query @"
 resources
 | where type in ('microsoft.managedidentity/userassignedidentities')
-| project name, resourceGroup, subscriptionId, location, tags
+| project id, name, resourceGroup, subscriptionId, location, tags
 | order by name asc
 "@
 
@@ -437,7 +437,7 @@ resources
                  'microsoft.insights/actiongroups',
                  'microsoft.monitor/accounts')
 | extend skuName = sku.name, retentionDays = properties.retentionInDays
-| project name, type, resourceGroup, subscriptionId, location, skuName, retentionDays, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, retentionDays, tags
 | order by type asc, name asc
 "@
 
@@ -456,7 +456,7 @@ policyresources
          enforcementMode = properties.enforcementMode,
          policyDefinitionId = properties.policyDefinitionId,
          scope = properties.scope
-| project name, displayName, enforcementMode, policyDefinitionId, scope, subscriptionId
+| project id, name, displayName, enforcementMode, policyDefinitionId, scope, subscriptionId
 | order by displayName asc
 "@
 
@@ -473,7 +473,7 @@ resources
 | where type in ('microsoft.recoveryservices/vaults',
                  'microsoft.dataprotection/backupvaults')
 | extend skuName = sku.name, redundancy = properties.storageSettings[0].type
-| project name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
+| project id, name, type, resourceGroup, subscriptionId, location, skuName, redundancy, tags
 | order by type asc, name asc
 "@
 
@@ -495,7 +495,7 @@ resources
              tostring(properties.ipConfiguration.id),
              'Unassociated'
          )
-| project name, resourceGroup, subscriptionId, location, ipAddress,
+| project id, name, resourceGroup, subscriptionId, location, ipAddress,
           allocationMethod, skuName, associatedTo, tags
 | order by name asc
 "@
@@ -506,7 +506,7 @@ $dns = Invoke-ResourceGraphQuery -Description "DNS Zones" -Query @"
 resources
 | where type in ('microsoft.network/dnszones', 'microsoft.network/privatednszones')
 | extend recordSetCount = properties.numberOfRecordSets
-| project name, type, resourceGroup, subscriptionId, location, recordSetCount, tags
+| project id, name, type, resourceGroup, subscriptionId, location, recordSetCount, tags
 | order by type asc, name asc
 "@
 
@@ -525,7 +525,7 @@ resources
 | extend diskSizeGB = properties.diskSizeGB,
          skuName = sku.name,
          diskState = properties.diskState
-| project name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
+| project id, name, resourceGroup, subscriptionId, location, diskSizeGB, skuName, diskState, tags
 | order by diskSizeGB desc
 "@
 
@@ -536,7 +536,7 @@ resources
 | where type == 'microsoft.compute/virtualmachines'
 | where properties.extended.instanceView.powerState.displayStatus == 'VM deallocated'
 | extend vmSize = properties.hardwareProfile.vmSize
-| project name, resourceGroup, subscriptionId, location, vmSize, tags
+| project id, name, resourceGroup, subscriptionId, location, vmSize, tags
 | order by name asc
 "@
 
@@ -556,7 +556,7 @@ advisorresources
          impactedField = properties.impactedField,
          impactedValue = properties.impactedValue,
          shortDescription = tostring(properties.shortDescription.solution)
-| project category, impact, impactedField, impactedValue, shortDescription, subscriptionId
+| project id, category, impact, impactedField, impactedValue, shortDescription, subscriptionId
 | order by category asc, impact desc
 "@
 

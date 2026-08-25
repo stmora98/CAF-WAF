@@ -336,6 +336,14 @@ EMPTY_STATE_PT = {
 def bi_empty(en: str, es: str) -> str:
     """Render a translated empty-state message, falling back to English for new messages."""
     return bi(en, es, EMPTY_STATE_PT.get(en, en))
+
+def _resource_link_attr(row: dict) -> str:
+    """Return a data-resource-id (+ title) HTML attribute string when the row carries an ARM resource id, so the row can be double-clicked open in the Azure Portal."""
+    resource_id = row.get("id") or row.get("Id") or row.get("ResourceId")
+    if not resource_id or not str(resource_id).startswith("/"):
+        return ""  # not a full ARM path (e.g. a bare GUID) - can't build a portal link from it
+    tip = bi("Double-click to open in Azure Portal", "Doble clic para abrir en Azure Portal", "Clique duas vezes para abrir no Portal do Azure")
+    return f' data-resource-id="{escape(str(resource_id))}" title="{tip}"'
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA READER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1555,6 +1563,7 @@ class DashboardGenerator:
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                row_attr += _resource_link_attr(row)
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
@@ -1965,6 +1974,7 @@ class DashboardGenerator:
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                row_attr += _resource_link_attr(row)
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
@@ -2539,6 +2549,7 @@ class DashboardGenerator:
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                row_attr += _resource_link_attr(row)
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
@@ -3208,6 +3219,7 @@ class DashboardGenerator:
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                row_attr += _resource_link_attr(row)
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
@@ -3363,6 +3375,7 @@ class DashboardGenerator:
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                row_attr += _resource_link_attr(row)
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
@@ -3475,6 +3488,7 @@ class DashboardGenerator:
                     for key, _, _, numeric in columns
                 )
                 row_attr = ' class="extra-row" hidden' if i >= limit else ""
+                row_attr += _resource_link_attr(row)
                 body += f"<tr{row_attr}>{cells}</tr>"
             more = ""
             if len(rows) > limit:
@@ -4009,6 +4023,10 @@ body {{
     border: 1px solid var(--cp-border); background: var(--cp-bg); font-size: 12.5px; cursor: pointer;
 }}
 .global-sub-check input {{ margin: 0; }}
+
+/* Rows whose data carries an ARM resource id can be double-clicked to open in the Azure Portal */
+.security-table-wrap tbody tr[data-resource-id] {{ cursor: pointer; }}
+.security-table-wrap tbody tr[data-resource-id]:hover {{ background: var(--cp-bg); }}
 .cost-pivot-wrap {{ width: 100%; overflow-x: auto; }}
 .cost-pivot-wrap table {{ min-width: 540px; width: 100%; border-collapse: collapse; }}
 .cost-pivot-wrap th, .cost-pivot-wrap td {{ padding: 8px 12px; border-bottom: 1px solid var(--cp-border); text-align: left; }}
@@ -4719,6 +4737,16 @@ function toggleTableRows(btn) {{
     var rows = wrap.querySelectorAll('.extra-row');
     for (var i = 0; i < rows.length; i++) {{ rows[i].hidden = !expanded; }}
 }}
+
+/* Double-click any table row carrying a data-resource-id (ARM resource id) to open it
+   directly in the Azure Portal. Single delegated listener - works for any current/future table. */
+document.addEventListener('dblclick', function(e) {{
+    var row = e.target.closest('tr[data-resource-id]');
+    if (!row) return;
+    var id = row.getAttribute('data-resource-id');
+    if (!id) return;
+    window.open('https://portal.azure.com/#resource' + id + '/overview', '_blank', 'noopener');
+}});
 
 /* ---- Per-table filters: auto-detects categorical columns (Subscription, Resource Group,
    Severity, etc.) in every rendered table and injects a dropdown per column plus a free-text
