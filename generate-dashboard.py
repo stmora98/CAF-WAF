@@ -1556,6 +1556,9 @@ class DashboardGenerator:
         def render_table(rows, columns, empty_en, empty_es, limit=12):
             if not rows:
                 return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            MAX_TABLE_ROWS = 300
+            row_total = len(rows)
+            rows = rows[:MAX_TABLE_ROWS]
             header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
@@ -1574,6 +1577,8 @@ class DashboardGenerator:
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
                 )
+            if row_total > MAX_TABLE_ROWS:
+                more += f'<p class="table-truncated-note">{bi(f"Showing first {MAX_TABLE_ROWS} of {row_total} rows for performance - see the source export for the full list.", f"Mostrando las primeras {MAX_TABLE_ROWS} de {row_total} filas por rendimiento - consulte el archivo de origen para ver la lista completa.", f"Mostrando as primeiras {MAX_TABLE_ROWS} de {row_total} linhas por desempenho - consulte o arquivo de origem para a lista completa.")}</p>'
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         def disc_real_rows(sheet_name):
@@ -1967,6 +1972,9 @@ class DashboardGenerator:
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
                 return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            MAX_TABLE_ROWS = 300
+            row_total = len(rows)
+            rows = rows[:MAX_TABLE_ROWS]
             header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
@@ -1985,6 +1993,8 @@ class DashboardGenerator:
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
                 )
+            if row_total > MAX_TABLE_ROWS:
+                more += f'<p class="table-truncated-note">{bi(f"Showing first {MAX_TABLE_ROWS} of {row_total} rows for performance - see the source export for the full list.", f"Mostrando las primeras {MAX_TABLE_ROWS} de {row_total} filas por rendimiento - consulte el archivo de origen para ver la lista completa.", f"Mostrando as primeiras {MAX_TABLE_ROWS} de {row_total} linhas por desempenho - consulte o arquivo de origem para a lista completa.")}</p>'
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         mg_rows = real_rows("MgmtGroups")
@@ -2542,6 +2552,9 @@ class DashboardGenerator:
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
                 return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            MAX_TABLE_ROWS = 300
+            row_total = len(rows)
+            rows = rows[:MAX_TABLE_ROWS]
             header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
@@ -2560,6 +2573,8 @@ class DashboardGenerator:
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
                 )
+            if row_total > MAX_TABLE_ROWS:
+                more += f'<p class="table-truncated-note">{bi(f"Showing first {MAX_TABLE_ROWS} of {row_total} rows for performance - see the source export for the full list.", f"Mostrando las primeras {MAX_TABLE_ROWS} de {row_total} filas por rendimiento - consulte el archivo de origen para ver la lista completa.", f"Mostrando as primeiras {MAX_TABLE_ROWS} de {row_total} linhas por desempenho - consulte o arquivo de origem para a lista completa.")}</p>'
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         def waste_priority(assessment):
@@ -3223,6 +3238,9 @@ class DashboardGenerator:
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
                 return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            MAX_TABLE_ROWS = 300
+            row_total = len(rows)
+            rows = rows[:MAX_TABLE_ROWS]
             header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
@@ -3241,6 +3259,8 @@ class DashboardGenerator:
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
                 )
+            if row_total > MAX_TABLE_ROWS:
+                more += f'<p class="table-truncated-note">{bi(f"Showing first {MAX_TABLE_ROWS} of {row_total} rows for performance - see the source export for the full list.", f"Mostrando las primeras {MAX_TABLE_ROWS} de {row_total} filas por rendimiento - consulte el archivo de origen para ver la lista completa.", f"Mostrando as primeiras {MAX_TABLE_ROWS} de {row_total} linhas por desempenho - consulte o arquivo de origem para a lista completa.")}</p>'
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         def ddos_enabled(v):
@@ -3379,6 +3399,9 @@ class DashboardGenerator:
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
                 return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            MAX_TABLE_ROWS = 300
+            row_total = len(rows)
+            rows = rows[:MAX_TABLE_ROWS]
             header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
@@ -3397,6 +3420,8 @@ class DashboardGenerator:
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
                 )
+            if row_total > MAX_TABLE_ROWS:
+                more += f'<p class="table-truncated-note">{bi(f"Showing first {MAX_TABLE_ROWS} of {row_total} rows for performance - see the source export for the full list.", f"Mostrando las primeras {MAX_TABLE_ROWS} de {row_total} filas por rendimiento - consulte el archivo de origen para ver la lista completa.", f"Mostrando as primeiras {MAX_TABLE_ROWS} de {row_total} linhas por desempenho - consulte o arquivo de origem para a lista completa.")}</p>'
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         vm_metrics = real_rows(metrics, "VM_RightSizing")
@@ -3492,6 +3517,9 @@ class DashboardGenerator:
         def render_table(rows, columns, empty_en, empty_es, limit=15):
             if not rows:
                 return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            MAX_TABLE_ROWS = 300
+            row_total = len(rows)
+            rows = rows[:MAX_TABLE_ROWS]
             header = "".join(f"<th>{bi(label_en, label_es, LABEL_PT.get(label_en, label_en))}</th>" for _, label_en, label_es, _ in columns)
             body = ""
             for i, row in enumerate(rows):
@@ -3510,6 +3538,8 @@ class DashboardGenerator:
                     '<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
                     f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
                 )
+            if row_total > MAX_TABLE_ROWS:
+                more += f'<p class="table-truncated-note">{bi(f"Showing first {MAX_TABLE_ROWS} of {row_total} rows for performance - see the source export for the full list.", f"Mostrando las primeras {MAX_TABLE_ROWS} de {row_total} filas por rendimiento - consulte el archivo de origen para ver la lista completa.", f"Mostrando as primeiras {MAX_TABLE_ROWS} de {row_total} linhas por desempenho - consulte o arquivo de origem para a lista completa.")}</p>'
             return f'<div class="security-table-wrap"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>{more}'
 
         diag = real_rows(metrics, "DiagnosticsCoverage")
@@ -4323,6 +4353,7 @@ body {{
 .table-more-note .less-label {{ display: none; }}
 .table-more-note.expanded .more-label {{ display: none; }}
 .table-more-note.expanded .less-label {{ display: inline; }}
+.table-truncated-note {{ font-size: 11px; color: var(--cp-text-muted); font-style: italic; margin-top: 6px; }}
 @media (max-width: 700px) {{
     .resource-rec-grid {{ grid-template-columns: minmax(0, 1fr); }}
     .resource-rec-heading {{ align-items: flex-start; }}
