@@ -20,6 +20,7 @@ import os
 import json
 import re
 import hashlib
+import base64
 from collections import defaultdict
 from datetime import datetime
 from html import escape
@@ -47,7 +48,7 @@ except ImportError:
 
 class DashboardConfig:
     SEVERITY_COLORS = {
-     "critical": "var(--cp-danger)",
+     "critical": "var(--cp-critical)",
      "high": "var(--cp-danger)",
      "medium": "var(--cp-warning)",
      "low": "var(--cp-link)",
@@ -104,6 +105,35 @@ PILLAR_PT = {
     "Operational Excellence": "Excelência Operacional",
     "Performance Efficiency": "Eficiência de Desempenho",
 }
+
+# CSS custom-property names (no "var()" wrapper) matching DashboardConfig.PILLAR_COLORS,
+# used by Chart.js charts which must resolve actual color values via getComputedStyle().
+PILLAR_COLOR_VARS = {
+    "Reliability": "--cp-link",
+    "Security": "--cp-danger",
+    "Cost Optimization": "--cp-success",
+    "Operational Excellence": "--cp-accent",
+    "Performance Efficiency": "--cp-warning",
+}
+
+# Trilingual labels + CSS var name for each severity bucket, reused by every Chart.js
+# severity chart across Overview/Security/Reliability/etc.
+SEVERITY_LABELS = {
+    "critical": {"en": "Critical", "es": "Cr\u00edtico", "pt": "Cr\u00edtico"},
+    "high": {"en": "High", "es": "Alto", "pt": "Alto"},
+    "medium": {"en": "Medium", "es": "Medio", "pt": "M\u00e9dio"},
+    "low": {"en": "Low", "es": "Bajo", "pt": "Baixo"},
+    "info": {"en": "Info", "es": "Info", "pt": "Info"},
+    "informational": {"en": "Info", "es": "Info", "pt": "Info"},
+    "unknown": {"en": "Unknown", "es": "Desconocido", "pt": "Desconhecido"},
+}
+
+def _bare_var(css_color: Optional[str]) -> str:
+    """Strip a 'var(--x)' wrapper down to the bare '--x' custom-property name for Chart.js
+    (which must resolve colors via getComputedStyle(), not the CSS var() function)."""
+    if not css_color:
+        return "--cp-text-muted"
+    return css_color.replace("var(", "").rstrip(")")
 
 
 SEVERITY_ES = {
@@ -336,6 +366,21 @@ EMPTY_STATE_PT = {
 def bi_empty(en: str, es: str) -> str:
     """Render a translated empty-state message, falling back to English for new messages."""
     return bi(en, es, EMPTY_STATE_PT.get(en, en))
+
+_CHART_TABLE_BLOCK_UID = 0
+
+def chart_table_block(chart_html: str, table_html: str) -> str:
+    """Wrap a Chart.js chart + its underlying table in a 'Chart | Table' toggle (chart shown
+    by default, table available as an unmodified drill-down) - reusable across every
+    table-to-chart conversion so the original data is never actually removed."""
+    return f"""<div class="chart-table-block">
+        <div class="chart-table-toggle" role="tablist">
+            <button type="button" class="ctt-btn is-active" data-view="chart">{bi('Chart', 'Gr\u00e1fico', 'Gr\u00e1fico')}</button>
+            <button type="button" class="ctt-btn" data-view="table">{bi('Table', 'Tabla', 'Tabela')}</button>
+        </div>
+        <div class="ctt-panel ctt-chart">{chart_html}</div>
+        <div class="ctt-panel ctt-table" hidden>{table_html}</div>
+    </div>"""
 
 def _resource_link_attr(row: dict) -> str:
     """Return a data-resource-id (+ title) HTML attribute string when the row carries an ARM resource id, so the row can be double-clicked open in the Azure Portal."""
@@ -1487,6 +1532,10 @@ class DashboardGenerator:
         self.data = data
         self.base_dir = base_dir
         self.progress = progress or {"previous": None, "resolved": [], "new_count": 0, "overall_delta": None, "pillar_deltas": {}}
+        # Chart.js chart configs (canvasId -> config) contributed by any _render_*_view()
+        # method - consumed by initAllCharts() in the embedded <script>, serialized once
+        # in generate().
+        self._chart_data: dict = {}
 
     @staticmethod
     def _count_real(rows: list) -> int:
@@ -1516,6 +1565,39 @@ class DashboardGenerator:
         svg = re.sub(r'url\(#([^)]+)\)', lambda m: f'url(#{m.group(1)}-{uid})', svg)
         svg = re.sub(r"<svg ", f'<svg class="{css_class}" ', svg, count=1)
         return svg
+
+    # Original mark for this toolkit (favicon only): a classic compass, needle twisted to a
+    # bearing rather than due north - the toolkit "guides" the workload assessment across the
+    # WAF pillars. Muted/desaturated palette (no vivid red/blue).
+    def _assessment_logo_svg(self, css_class: str = "az-icon header-logo") -> str:
+        """Render this toolkit's own logo (not the official Azure logo): a compass badge, used
+        for the browser favicon."""
+        body = '<circle cx="20" cy="20" r="18" fill="#4A6FA1" />'
+        ring = '<circle cx="20" cy="20" r="14" fill="none" stroke="#E7ECF2" stroke-width="1.4" opacity="0.5" />'
+        ticks = "".join(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#E7ECF2" stroke-width="1.4" opacity="0.5" />'
+            for x1, y1, x2, y2 in [(20, 4, 20, 7), (20, 33, 20, 36), (4, 20, 7, 20), (33, 20, 36, 20)]
+        )
+        needle_north = '<path d="M 20 8 L 24 20 L 16 20 Z" fill="#B5675A" />'
+        needle_south = '<path d="M 20 32 L 24 20 L 16 20 Z" fill="#EDEDED" />'
+        needle = f'<g transform="rotate(35 20 20)">{needle_north}{needle_south}</g>'
+        pivot = '<circle cx="20" cy="20" r="2.4" fill="#33333a" />'
+        return (
+            f'<svg class="{css_class}" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">'
+            f'{body}{ring}{ticks}{needle}{pivot}</svg>'
+        )
+
+    _VENDOR_JS_CACHE: dict = {}
+
+    def _vendor_js(self, filename: str) -> str:
+        """Read a vendored JS library (assets/vendor/*.js) so it can be inlined into the
+        generated HTML - keeps the dashboard a single offline-viewable file with no CDN calls."""
+        content = self._VENDOR_JS_CACHE.get(filename)
+        if content is None:
+            js_path = Path(__file__).parent / "assets" / "vendor" / filename
+            content = js_path.read_text(encoding="utf-8") if js_path.exists() else ""
+            self._VENDOR_JS_CACHE[filename] = content
+        return content
 
     _RESOURCE_KIND_ICON = {
         "VMs": "resource-compute", "DeallocatedVMs": "resource-compute",
@@ -1644,6 +1726,78 @@ class DashboardGenerator:
             real_rows("Vulnerabilities"),
             key=lambda row: severity_rank.get(str(row.get("Severity", "")).lower(), 5),
         )
+
+        # CSPM recommendations: Healthy/Unhealthy/Not Applicable donut (raw, unfiltered counts)
+        rec_state_counts = defaultdict(int)
+        for row in real_rows("Recommendations"):
+            state = str(row.get("recommendationState", "")).lower()
+            rec_state_counts["healthy" if state == "healthy" else "notapplicable" if state == "notapplicable" else "unhealthy"] += 1
+        rec_state_present = [s for s in ("healthy", "unhealthy", "notapplicable") if rec_state_counts.get(s, 0) > 0]
+        rec_state_labels = {"healthy": {"en": "Healthy", "es": "Saludable", "pt": "Saud\u00e1vel"},
+                             "unhealthy": {"en": "Unhealthy", "es": "No saludable", "pt": "N\u00e3o saud\u00e1vel"},
+                             "notapplicable": {"en": "Not Applicable", "es": "No aplicable", "pt": "N\u00e3o aplic\u00e1vel"}}
+        rec_state_colors = {"healthy": "--cp-success", "unhealthy": "--cp-danger", "notapplicable": "--cp-text-muted"}
+        if rec_state_present:
+            self._chart_data["cspmStatus"] = {
+                "type": "donut", "canvasId": "cspmStatusChart",
+                "labels": {lang: [rec_state_labels[s][lang] for s in rec_state_present] for lang in ("en", "es", "pt")},
+                "values": [rec_state_counts[s] for s in rec_state_present],
+                "colorVars": [rec_state_colors[s] for s in rec_state_present],
+            }
+        # CSPM findings by severity (open/unresolved recommendations only)
+        cspm_severity_counts = defaultdict(int)
+        for row in recommendations:
+            cspm_severity_counts[str(row.get("recommendationSeverity", "")).lower() or "unknown"] += 1
+        cspm_severity_present = [s for s in ("critical", "high", "medium", "low") if cspm_severity_counts.get(s, 0) > 0]
+        if cspm_severity_present:
+            self._chart_data["cspmSeverity"] = {
+                "type": "hbar", "canvasId": "cspmSeverityChart",
+                "labels": {lang: [SEVERITY_LABELS.get(s, {}).get(lang, s.capitalize()) for s in cspm_severity_present] for lang in ("en", "es", "pt")},
+                "values": [cspm_severity_counts[s] for s in cspm_severity_present],
+                "colorVars": [_bare_var(DashboardConfig.SEVERITY_COLORS.get(s)) for s in cspm_severity_present],
+            }
+        cspm_chart_html = f"""<div class="chart-mini-grid">
+            <div><div class="chart-mini-title">{bi('By status', 'Por estado', 'Por status')}</div><div class="chart-card-body" style="height:190px;">{'<canvas id="cspmStatusChart"></canvas>' if rec_state_present else f'<p class="empty-state">{bi_empty("No data.", "Sin datos.")}</p>'}</div></div>
+            <div><div class="chart-mini-title">{bi('By severity', 'Por severidad', 'Por severidade')}</div><div class="chart-card-body" style="height:190px;">{'<canvas id="cspmSeverityChart"></canvas>' if cspm_severity_present else f'<p class="empty-state">{bi_empty("No open recommendations.", "Sin recomendaciones abiertas.")}</p>'}</div></div>
+        </div>"""
+
+        # Vulnerabilities by severity + exploit status (only using fields already present in the data)
+        vuln_severity_counts = defaultdict(int)
+        for row in vulnerabilities:
+            sev = str(row.get("Severity", "")).lower()
+            vuln_severity_counts[sev if sev in ("critical", "high", "medium", "low") else "unknown"] += 1
+        vuln_severity_present = [s for s in ("critical", "high", "medium", "low", "unknown") if vuln_severity_counts.get(s, 0) > 0]
+        if vuln_severity_present:
+            self._chart_data["vulnSeverity"] = {
+                "type": "hbar", "canvasId": "vulnSeverityChart",
+                "labels": {lang: [SEVERITY_LABELS.get(s, {}).get(lang, s.capitalize()) for s in vuln_severity_present] for lang in ("en", "es", "pt")},
+                "values": [vuln_severity_counts[s] for s in vuln_severity_present],
+                "colorVars": [_bare_var(DashboardConfig.SEVERITY_COLORS.get(s)) for s in vuln_severity_present],
+            }
+        has_exploit_fields = any(("ExploitVerified" in row or "PublicExploit" in row) for row in vulnerabilities)
+        exploit_counts = defaultdict(int)
+        if has_exploit_fields:
+            for row in vulnerabilities:
+                verified = str(row.get("ExploitVerified", "")).lower() in ("true", "1", "yes")
+                public = str(row.get("PublicExploit", "")).lower() in ("true", "1", "yes")
+                exploit_counts["verified" if verified else "public" if public else "none"] += 1
+        exploit_present = [s for s in ("verified", "public", "none") if exploit_counts.get(s, 0) > 0]
+        exploit_labels = {"verified": {"en": "Verified exploit", "es": "Exploit verificado", "pt": "Exploit verificado"},
+                           "public": {"en": "Public exploit", "es": "Exploit p\u00fablico", "pt": "Exploit p\u00fablico"},
+                           "none": {"en": "No known exploit", "es": "Sin exploit conocido", "pt": "Sem exploit conhecido"}}
+        exploit_colors = {"verified": "--cp-danger", "public": "--cp-warning", "none": "--cp-success"}
+        if exploit_present:
+            self._chart_data["vulnExploit"] = {
+                "type": "donut", "canvasId": "vulnExploitChart",
+                "labels": {lang: [exploit_labels[s][lang] for s in exploit_present] for lang in ("en", "es", "pt")},
+                "values": [exploit_counts[s] for s in exploit_present],
+                "colorVars": [exploit_colors[s] for s in exploit_present],
+            }
+        vuln_chart_html = f"""<div class="chart-mini-grid">
+            <div><div class="chart-mini-title">{bi('By severity', 'Por severidad', 'Por severidade')}</div><div class="chart-card-body" style="height:190px;">{'<canvas id="vulnSeverityChart"></canvas>' if vuln_severity_present else f'<p class="empty-state">{bi_empty("No vulnerabilities returned.", "No se devolvieron vulnerabilidades.")}</p>'}</div></div>
+            <div><div class="chart-mini-title">{bi('Exploit status', 'Estado del exploit', 'Status do exploit')}</div><div class="chart-card-body" style="height:190px;">{'<canvas id="vulnExploitChart"></canvas>' if exploit_present else f'<p class="empty-state">{bi_empty("No exploit data available.", "No hay datos de exploit disponibles.")}</p>'}</div></div>
+        </div>"""
+
         machines = real_rows("Machines")
         at_risk_machines = len([
             machine for machine in machines
@@ -1740,6 +1894,29 @@ class DashboardGenerator:
             ("SeverityScore", "Severity Score", "Puntaje de severidad", True),
             ("Status", "Status", "Estado", False),
         ], "No Defender for Endpoint recommendations returned.", "No se devolvieron recomendaciones de Defender for Endpoint.")
+        if endpoint_recommendations:
+            def score_bucket(score):
+                if score >= 9:
+                    return "critical"
+                if score >= 7:
+                    return "high"
+                if score >= 4:
+                    return "medium"
+                return "low"
+            bucket_counts = defaultdict(int)
+            for r in endpoint_recommendations:
+                bucket_counts[score_bucket(as_int(r.get("SeverityScore")))] += 1
+            bucket_present = [b for b in ("critical", "high", "medium", "low") if bucket_counts.get(b, 0) > 0]
+            self._chart_data["endpointRecsChart"] = {
+                "type": "donut", "canvasId": "endpointRecsChart",
+                "labels": {lang: [SEVERITY_LABELS.get(b, {}).get(lang, b.capitalize()) for b in bucket_present] for lang in ("en", "es", "pt")},
+                "values": [bucket_counts[b] for b in bucket_present],
+                "colorVars": [_bare_var(DashboardConfig.SEVERITY_COLORS.get(b)) for b in bucket_present],
+            }
+            endpoint_recs_chart_html = '<div class="chart-card-body" style="height:190px;"><canvas id="endpointRecsChart"></canvas></div>'
+            endpoint_recommendations_block = chart_table_block(endpoint_recs_chart_html, endpoint_recommendations_table)
+        else:
+            endpoint_recommendations_block = endpoint_recommendations_table
         vulnerabilities_table = render_table(vulnerabilities, [
             ("VulnerabilityId", "CVE", "CVE", False),
             ("Severity", "Severity", "Severidad", False),
@@ -1748,6 +1925,28 @@ class DashboardGenerator:
             ("PublicExploit", "Public Exploit", "Exploit público", False),
         ], "No Defender for Endpoint vulnerabilities returned.", "No se devolvieron vulnerabilidades de Defender for Endpoint.")
         compliance_bars = render_compliance_bars(regulatory_standards)
+
+        recommendations_block = chart_table_block(cspm_chart_html, recommendations_table) if recommendations else recommendations_table
+        vulnerabilities_block = chart_table_block(vuln_chart_html, vulnerabilities_table) if vulnerabilities else vulnerabilities_table
+
+        # Secure Score controls: horizontal progress bars (Control Name, Current %, Current/Max)
+        if controls:
+            controls_bars = ""
+            for c in controls:
+                current = as_int(c.get("currentScore"))
+                maximum = as_int(c.get("maxScore")) or 1
+                pct = round(current / maximum * 100) if maximum else 0
+                bar_color = "var(--cp-success)" if pct >= 80 else "var(--cp-warning)" if pct >= 50 else "var(--cp-danger)"
+                controls_bars += f"""<div class="control-progress-row">
+                    <div class="control-progress-label">{escape(str(c.get('controlName', '')))}</div>
+                    <div class="control-progress-track"><div class="control-progress-fill" style="width:{pct}%; background:{bar_color};"></div></div>
+                    <div class="control-progress-value">{current}/{maximum} ({pct}%)</div>
+                </div>"""
+            controls_chart_html = f'<div class="control-progress-list">{controls_bars}</div>'
+            controls_block = chart_table_block(controls_chart_html, controls_table)
+        else:
+            controls_block = controls_table
+
         keyvault_expirations_table = render_table(keyvault_expirations, [
             ("VaultName", "Key Vault", "Key Vault", False),
             ("ItemType", "Type", "Tipo", False),
@@ -1782,14 +1981,14 @@ class DashboardGenerator:
 
         <div class="section">
             <div class="section-title security-title">{bi('CSPM recommendations', 'Recomendaciones CSPM', 'Recomendações CSPM')}{it('Defender for Cloud Cloud Security Posture Management findings from Azure Resource Graph - unresolved recommendations against your subscriptions.', 'Hallazgos de Cloud Security Posture Management de Defender for Cloud, obtenidos vía Azure Resource Graph: recomendaciones sin resolver en tus suscripciones.', 'Descobertas de Cloud Security Posture Management do Defender for Cloud, via Azure Resource Graph: recomendações não resolvidas em suas assinaturas.')}</div>
-            {recommendations_table}
+            {recommendations_block}
         </div>
         <div class="section">
             <div class="section-title security-title">{bi('Regulatory and framework compliance', 'Cumplimiento normativo y de marcos', 'Conformidade regulatória e de frameworks')}{it('Compliance against built-in regulatory standards (e.g. ISO 27001, PCI-DSS) and the Microsoft Cloud Security Benchmark (MCSB), as evaluated by Defender for Cloud.', 'Cumplimiento con estándares regulatorios integrados (p.ej. ISO 27001, PCI-DSS) y el Microsoft Cloud Security Benchmark (MCSB), evaluado por Defender for Cloud.', 'Conformidade com padrões regulatórios internos (ex.: ISO 27001, PCI-DSS) e o Microsoft Cloud Security Benchmark (MCSB), avaliada pelo Defender for Cloud.')}</div>
             {compliance_bars}
         </div>
         <div class="security-two-column">
-            <div class="security-panel"><h3>{bi('Secure Score controls', 'Controles de Secure Score', 'Controles do Secure Score')}</h3>{controls_table}</div>
+            <div class="security-panel"><h3>{bi('Secure Score controls', 'Controles de Secure Score', 'Controles do Secure Score')}</h3>{controls_block}</div>
             <div class="security-panel"><h3>{bi('Microsoft Cloud Security Benchmark', 'Microsoft Cloud Security Benchmark', 'Microsoft Cloud Security Benchmark')}</h3>{mcsb_table}</div>
         </div>
         <div class="security-two-column">
@@ -1806,8 +2005,8 @@ class DashboardGenerator:
         <div class="section">
             <div class="section-title security-title">{bi('Defender for Endpoint exposure', 'Exposición de Defender for Endpoint', 'Exposição do Defender for Endpoint')}{it('Onboarded devices, endpoint security recommendations and vulnerabilities reported by Defender for Endpoint.', 'Dispositivos incorporados, recomendaciones de seguridad de endpoints y vulnerabilidades reportadas por Defender for Endpoint.', 'Dispositivos integrados, recomendações de segurança de endpoints e vulnerabilidades reportadas pelo Defender for Endpoint.')}</div>
             <div class="security-two-column">
-                <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad', 'Recomendações de segurança')}</h3>{endpoint_recommendations_table}</div>
-                <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades', 'Vulnerabilidades')}</h3>{vulnerabilities_table}</div>
+                <div class="security-panel"><h3>{bi('Security recommendations', 'Recomendaciones de seguridad', 'Recomendações de segurança')}</h3>{endpoint_recommendations_block}</div>
+                <div class="security-panel"><h3>{bi('Vulnerabilities', 'Vulnerabilidades', 'Vulnerabilidades')}</h3>{vulnerabilities_block}</div>
             </div>
         </div>
         <div class="section">
@@ -2624,7 +2823,7 @@ class DashboardGenerator:
             return value if isinstance(value, datetime) else datetime.min
 
         def render_cost_trend_chart(rows):
-            """FinOps Hub-style monthly cost trend: area chart + MoM delta badge + simple next-month forecast."""
+            """FinOps Hub-style monthly cost trend: Chart.js line chart (real tooltips) + MoM delta badge + simple next-month forecast."""
             monthly = defaultdict(float)
             for r in rows:
                 monthly[r.get("BillingMonth")] += as_float(r.get("Cost"))
@@ -2640,41 +2839,17 @@ class DashboardGenerator:
                 deltas = [window[i] - window[i - 1] for i in range(1, len(window))]
                 avg_delta = sum(deltas) / len(deltas) if deltas else 0
                 forecast_value = max(values[-1] + avg_delta, 0)
-            total_points = n + (1 if forecast_value is not None else 0)
-            max_val = max(values + ([forecast_value] if forecast_value is not None else [])) or 1
-            width, height, pad_l, pad_r, pad_t, pad_b = 1000, 260, 24, 24, 40, 34
-            plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
-            xs_all = [width / 2] if total_points == 1 else [pad_l + i * (plot_w / (total_points - 1)) for i in range(total_points)]
-            xs = xs_all[:n]
-            ys = [pad_t + plot_h - (v / max_val * plot_h) for v in values]
-            points = list(zip(xs, ys))
-            line_d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in points)
-            area_d = line_d + f" L {xs[-1]:.1f},{pad_t + plot_h:.1f} L {xs[0]:.1f},{pad_t + plot_h:.1f} Z"
-            grid = "".join(
-                f'<line x1="{pad_l}" y1="{pad_t + plot_h * f:.1f}" x2="{width - pad_r}" y2="{pad_t + plot_h * f:.1f}" class="trend-grid-line" />'
-                for f in (0, 0.5, 1)
-            )
-            dots = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" class="trend-dot" />' for x, y in points)
-            value_labels = "".join(
-                f'<text x="{x:.1f}" y="{max(y - 12, 14):.1f}" text-anchor="middle" class="trend-value-label">${v:,.0f}</text>'
-                for (x, y), v in zip(points, values)
-            )
-            month_labels = "".join(
-                f'<text x="{x:.1f}" y="{height - 10}" text-anchor="middle" class="trend-month-label">{escape(lbl)}</text>'
-                for x, lbl in zip(xs, labels)
-            )
-            forecast_svg = ""
             forecast_badge = ""
+            chart_labels = {"en": list(labels), "es": list(labels), "pt": list(labels)}
+            actual_series = list(values)
+            forecast_series = [None] * n
             if forecast_value is not None:
-                fx, fy = xs_all[n], pad_t + plot_h - (forecast_value / max_val * plot_h)
-                forecast_svg = (
-                    f'<path d="M {xs[-1]:.1f},{ys[-1]:.1f} L {fx:.1f},{fy:.1f}" fill="none" stroke="var(--cp-warning)" '
-                    f'stroke-width="2.5" stroke-dasharray="6,5" stroke-linecap="round" />'
-                    f'<circle cx="{fx:.1f}" cy="{fy:.1f}" r="4" fill="var(--cp-warning)" stroke="var(--cp-warning)" />'
-                    f'<text x="{fx:.1f}" y="{max(fy - 12, 14):.1f}" text-anchor="middle" class="trend-value-label" style="fill:var(--cp-warning);">${forecast_value:,.0f}</text>'
-                    f'<text x="{fx:.1f}" y="{height - 10}" text-anchor="middle" class="trend-month-label" style="fill:var(--cp-warning);">'
-                    f'<tspan class="i18n-en">Forecast</tspan><tspan class="i18n-es">Pron\u00f3stico</tspan><tspan class="i18n-pt">Previs\u00e3o</tspan></text>'
-                )
+                forecast_word = {"en": "Forecast", "es": "Pron\u00f3stico", "pt": "Previs\u00e3o"}
+                for lang, word in forecast_word.items():
+                    chart_labels[lang].append(word)
+                actual_series.append(None)
+                forecast_series.append(forecast_value)
+                forecast_series[n - 1] = values[-1]  # connect the dashed segment to the last real point
                 forecast_badge = (
                     f'<span class="finops-trend-delta" style="color:var(--cp-warning);">'
                     f'{bi("Next month forecast", "Pron\u00f3stico pr\u00f3ximo mes", "Previs\u00e3o do pr\u00f3ximo m\u00eas")}: ${forecast_value:,.0f}</span>'
@@ -2687,8 +2862,19 @@ class DashboardGenerator:
                     arrow, color = "\u25cf", "var(--cp-text-muted)"
                 delta_html = (
                     f'<span class="finops-trend-delta" style="color:{color};">{arrow} {abs(delta_pct):.1f}% '
-                    f'{bi("vs prior month", "vs. mes anterior", "vs. mês anterior")}</span>'
+                    f'{bi("vs prior month", "vs. mes anterior", "vs. m\u00eas anterior")}</span>'
                 )
+            self._chart_data["costTrend"] = {
+                "type": "line", "canvasId": "costTrendChart",
+                "labels": chart_labels,
+                "datasets": [
+                    {"label": {"en": "Actual", "es": "Real", "pt": "Real"}, "data": actual_series, "colorVar": "--cp-accent", "fill": True},
+                    {"label": {"en": "Forecast", "es": "Pron\u00f3stico", "pt": "Previs\u00e3o"}, "data": forecast_series, "colorVar": "--cp-warning", "dashed": True},
+                ] if forecast_value is not None else [
+                    {"label": {"en": "Actual", "es": "Real", "pt": "Real"}, "data": actual_series, "colorVar": "--cp-accent", "fill": True},
+                ],
+                "opts": {"currency": True},
+            }
             return f"""<div class="finops-trend-card">
                 <div class="finops-trend-head">
                     <div>
@@ -2698,21 +2884,7 @@ class DashboardGenerator:
                     {delta_html}
                     {forecast_badge}
                 </div>
-                <svg viewBox="0 0 {width} {height}" class="finops-trend-svg">
-                    <defs>
-                        <linearGradient id="costTrendGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="var(--cp-accent)" stop-opacity="0.35" />
-                            <stop offset="100%" stop-color="var(--cp-accent)" stop-opacity="0" />
-                        </linearGradient>
-                    </defs>
-                    {grid}
-                    <path d="{area_d}" fill="url(#costTrendGrad)" stroke="none" />
-                    <path d="{line_d}" fill="none" stroke="var(--cp-accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
-                    {dots}
-                    {value_labels}
-                    {month_labels}
-                    {forecast_svg}
-                </svg>
+                <div class="chart-card-body" style="height:260px;"><canvas id="costTrendChart"></canvas></div>
             </div>"""
 
         def render_cost_breakdown_bars(rows, group_key, empty_en, empty_es, limit=6):
@@ -2739,6 +2911,34 @@ class DashboardGenerator:
                 for name, v in top
             )
             return f'<div class="cost-bar-chart">{rows_html}</div>'
+
+        def render_cost_breakdown_chart(rows, group_key, canvas_id, col_label, empty_en, empty_es, limit=10):
+            """Chart.js horizontal bar (Top N by cost) + full 'Show all' table drill-down."""
+            totals = defaultdict(float)
+            for r in rows:
+                totals[str(r.get(group_key) or "Unknown")] += as_float(r.get("Cost"))
+            if not totals:
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            items = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+            total_all = sum(v for _, v in items) or 1
+            top = items[:limit]
+            self._chart_data[canvas_id] = {
+                "type": "hbar", "canvasId": canvas_id,
+                "labels": {"en": [n for n, _ in top], "es": [n for n, _ in top], "pt": [n for n, _ in top]},
+                "values": [round(v, 2) for _, v in top],
+                "colorVars": ["--cp-accent"] * len(top),
+                "opts": {"currency": True},
+            }
+            chart_html = f'<div class="chart-card-body" style="height:{max(180, len(top) * 26)}px;"><canvas id="{canvas_id}"></canvas></div>'
+            table_rows = "".join(
+                f"<tr><td>{escape(name)}</td><td class='num'>${v:,.0f}</td><td class='num'>{(v / total_all * 100):.1f}%</td></tr>"
+                for name, v in items
+            )
+            table_html = f"""<div class="security-table-wrap"><table>
+                <thead><tr><th>{col_label}</th><th>{bi('Cost', 'Costo', 'Custo')}</th><th>{bi('Share', 'Participaci\u00f3n', 'Participa\u00e7\u00e3o')}</th></tr></thead>
+                <tbody>{table_rows}</tbody>
+            </table></div>"""
+            return chart_table_block(chart_html, table_html)
 
         cost_recs = real_rows(advisor, "Cost")
         reservation_recs = [r for r in real_rows(advisor, "ReservationRecommendations") if r.get("ResourceType") or r.get("SkuName")]
@@ -2996,8 +3196,8 @@ class DashboardGenerator:
 
         actual_cost_table = render_actual_cost_section(actual_cost_rows)
         cost_trend_chart = render_cost_trend_chart(actual_cost_rows)
-        cost_by_service_bars = render_cost_breakdown_bars(
-            actual_cost_rows, "ServiceName",
+        cost_by_service_bars = render_cost_breakdown_chart(
+            actual_cost_rows, "ServiceName", "costByServiceChart", bi("Service", "Servicio", "Servi\u00e7o"),
             "No service cost data found.", "No se encontraron datos de costo por servicio.",
         )
         cost_by_subscription_bars = render_cost_breakdown_bars(
@@ -3323,6 +3523,21 @@ class DashboardGenerator:
             ("solution", "Solution", "Soluci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor reliability recommendations found.", "No se encontraron recomendaciones de confiabilidad de Advisor.")
+        impact_counts = defaultdict(int)
+        for r in reliability_recs:
+            impact_counts[str(r.get("impact", "")).lower() or "unknown"] += 1
+        impact_present = [i for i in ("high", "medium", "low") if impact_counts.get(i, 0) > 0]
+        if impact_present:
+            self._chart_data["reliabilityImpact"] = {
+                "type": "donut", "canvasId": "reliabilityImpactChart",
+                "labels": {lang: [SEVERITY_LABELS.get(i, {}).get(lang, i.capitalize()) for i in impact_present] for lang in ("en", "es", "pt")},
+                "values": [impact_counts[i] for i in impact_present],
+                "colorVars": [_bare_var(DashboardConfig.SEVERITY_COLORS.get(i)) for i in impact_present],
+            }
+            recs_chart_html = '<div class="chart-card-body" style="height:200px;"><canvas id="reliabilityImpactChart"></canvas></div>'
+            recs_block = chart_table_block(recs_chart_html, recs_table)
+        else:
+            recs_block = recs_table
         protected_items_table = render_table(protected_items, [
             ("friendlyName", "Item", "Elemento", False),
             ("protectedItemType", "Type", "Tipo", False),
@@ -3370,7 +3585,7 @@ class DashboardGenerator:
         </div>
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Advisor reliability recommendations', 'Recomendaciones de confiabilidad de Advisor', 'Recomenda\u00e7\u00f5es de confiabilidade do Advisor')}{it('Reliability recommendations generated by Azure Advisor.', 'Recomendaciones de confiabilidad generadas por Azure Advisor.', 'Recomenda\u00e7\u00f5es de confiabilidade geradas pelo Azure Advisor.')}</div>
-            {recs_table}
+            {recs_block}
         </div>
         <div class="section">
             <div class="section-title" style="border-bottom-color: var(--cp-link);">{bi('Score breakdown', 'Desglose de puntaje', 'Detalhamento da pontua\u00e7\u00e3o')}{it('How the reliability score is calculated, broken down by category and subcategory.', 'C\u00f3mo se calcula el puntaje de confiabilidad, desglosado por categor\u00eda y subcategor\u00eda.', 'Como a pontua\u00e7\u00e3o de confiabilidade \u00e9 calculada, detalhada por categoria e subcategoria.')}</div>
@@ -3637,7 +3852,6 @@ class DashboardGenerator:
         previous = self.progress.get("previous")
         if not previous:
             return f"""<div class="progress-banner progress-banner-empty">
-                <span class="progress-icon">🕓</span>
                 <span>{bi("This is the first recorded scan for this environment. Future runs will show score trends and resolved items here.", "Este es el primer escaneo registrado para este entorno. Las pr\u00f3ximas ejecuciones mostrar\u00e1n tendencias de puntaje y elementos resueltos aqu\u00ed.", "Este \u00e9 o primeiro scan registrado para este ambiente. As pr\u00f3ximas execu\u00e7\u00f5es mostrar\u00e3o tend\u00eancias de pontua\u00e7\u00e3o e itens resolvidos aqui.")}</span>
             </div>"""
 
@@ -3665,7 +3879,7 @@ class DashboardGenerator:
                 for r in resolved
             )
             resolved_html = f"""<details class="progress-resolved">
-                <summary>✅ {bi(f"{len(resolved)} action item(s) resolved since last scan", f"{len(resolved)} elemento(s) resuelto(s) desde el \u00faltimo escaneo", f"{len(resolved)} item(ns) resolvido(s) desde o \u00faltimo scan")}</summary>
+                <summary>{bi(f"{len(resolved)} action item(s) resolved since last scan", f"{len(resolved)} elemento(s) resuelto(s) desde el \u00faltimo escaneo", f"{len(resolved)} item(ns) resolvido(s) desde o \u00faltimo scan")}</summary>
                 <ul class="progress-resolved-list">{resolved_items}</ul>
             </details>"""
 
@@ -3675,7 +3889,6 @@ class DashboardGenerator:
 
         return f"""<div class="progress-banner">
             <div class="progress-banner-row">
-                <span class="progress-icon">📈</span>
                 <span class="progress-title">{bi("Since last scan", "Desde el \u00faltimo escaneo", "Desde o \u00faltimo scan")} ({escape(prev_date)})</span>
                 <span class="progress-overall">{bi("Overall score", "Puntaje general", "Pontua\u00e7\u00e3o geral")}: {overall_delta_html}</span>
                 {new_html}
@@ -3702,17 +3915,24 @@ class DashboardGenerator:
                 <h4>{pillar_label(pillar)}</h4>
                 <p class="breakdown-note">{insufficient_note}</p>
             </div>"""
+            def pct_bar_cell(pct):
+                color = "var(--cp-success)" if pct >= 80 else "var(--cp-warning)" if pct >= 50 else "var(--cp-danger)"
+                return f"<td class='num'><div class='inline-bar-wrap'><div class='inline-bar-track'><div class='inline-bar-fill' style='width:{pct}%; background:{color};'></div></div><span>{pct}%</span></div></td>"
+
             rows_html = "".join(
                 f"<tr><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
-                f"<td class='num'>{r['healthy']}/{r['total']}</td><td class='num'>{r['pct']}%</td></tr>"
+                f"<td class='num'>{r['healthy']}/{r['total']}</td>{pct_bar_cell(r['pct'])}</tr>"
                 for r in info["rows"]
             )
             return f"""<div class="breakdown-card">
                 <h4>{pillar_label(pillar)} <span class="breakdown-score">{self.engine.scores[pillar]}/100</span></h4>
-                <table>
-                    <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda', 'Subcategoria')}</th><th>{bi('Weight', 'Peso', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total', 'Saud\u00e1vel/Total')}</th><th>{bi('Score', 'Puntaje', 'Pontua\u00e7\u00e3o')}</th></tr></thead>
-                    <tbody>{rows_html}</tbody>
-                </table>
+                <div class="breakdown-table-wrap">
+                    <table class="subcategory-table">
+                        <colgroup><col class="subcat-name-col"><col class="subcat-num-col"><col class="subcat-num-col"><col class="subcat-score-col"></colgroup>
+                        <thead><tr><th>{bi('Subcategory', 'Subcategor\u00eda', 'Subcategoria')}</th><th>{bi('Weight', 'Peso', 'Peso')}</th><th>{bi('Healthy/Total', 'Saludable/Total', 'Saud\u00e1vel/Total')}</th><th>{bi('Score', 'Puntaje', 'Pontua\u00e7\u00e3o')}</th></tr></thead>
+                        <tbody>{rows_html}</tbody>
+                    </table>
+                </div>
             </div>"""
 
         sections.append(subcategory_card("Reliability"))
@@ -3844,24 +4064,75 @@ class DashboardGenerator:
 </div>"""
         else:
             global_sub_filter_html = ""
-        
+
+        # Chart.js chart configs (canvasId -> config), consumed by initAllCharts() in the
+        # embedded <script> - centralizes all chart definitions instead of scattering
+        # per-section inline scripts. Alias to the shared instance dict so other
+        # _render_*_view() methods (already called earlier, e.g. security_view_html)
+        # can also contribute entries.
+        chart_data = self._chart_data
+
         # Build action items HTML
         actions_html = "".join(self._render_action_card(action, i, show_pillar=True) for i, action in enumerate(action_items, 1))
-        
+
+        # Action items summary charts: by severity (donut) and by pillar (horizontal bar)
+        severity_order = ["critical", "high", "medium", "low", "info"]
+        severity_counts = defaultdict(int)
+        for a in action_items:
+            severity_counts[a.get("severity", "info")] += 1
+        severity_present = [s for s in severity_order if severity_counts.get(s, 0) > 0]
+        if severity_present:
+            chart_data["actionSeverity"] = {
+                "type": "donut", "canvasId": "actionSeverityChart",
+                "labels": {
+                    lang: [SEVERITY_LABELS.get(s, {}).get(lang, s.capitalize()) for s in severity_present]
+                    for lang in ("en", "es", "pt")
+                },
+                "values": [severity_counts[s] for s in severity_present],
+                "colorVars": [_bare_var(DashboardConfig.SEVERITY_COLORS.get(s)) for s in severity_present],
+            }
+        pillar_action_counts = defaultdict(int)
+        for a in action_items:
+            pillar_action_counts[a.get("pillar", "")] += 1
+        pillars_with_actions = [p for p in scores.keys() if pillar_action_counts.get(p, 0) > 0]
+        if pillars_with_actions:
+            chart_data["actionByPillar"] = {
+                "type": "hbar", "canvasId": "actionByPillarChart",
+                "labels": {
+                    "en": pillars_with_actions,
+                    "es": [PILLAR_ES.get(p, p) for p in pillars_with_actions],
+                    "pt": [PILLAR_PT.get(p, p) for p in pillars_with_actions],
+                },
+                "values": [pillar_action_counts[p] for p in pillars_with_actions],
+                "colorVars": [PILLAR_COLOR_VARS[p] for p in pillars_with_actions],
+            }
+
         # Build pillar score cards
         pillar_cards = ""
         for pillar, sc in scores.items():
             color = DashboardConfig.PILLAR_COLORS[pillar]
-            status_icon = "✅" if sc >= 80 else "⚠️" if sc >= 50 else "🔴"
             pillar_cards += f"""
             <div class="pillar-card">
                 <div class="pillar-score" style="color:{color};">{sc}</div>
                 <div class="pillar-bar">
                     <div class="pillar-bar-fill" style="width:{sc}%; background:{color};"></div>
                 </div>
-                <div class="pillar-name">{status_icon} {bi(pillar, PILLAR_ES.get(pillar, pillar), PILLAR_PT.get(pillar, pillar))}</div>
+                <div class="pillar-name">{bi(pillar, PILLAR_ES.get(pillar, pillar), PILLAR_PT.get(pillar, pillar))}</div>
             </div>"""
-        
+
+        # WAF Pillar Scores comparison chart (Overview, below the pillar cards)
+        chart_data["pillarScores"] = {
+            "type": "hbar", "canvasId": "pillarScoresChart",
+            "labels": {
+                "en": list(scores.keys()),
+                "es": [PILLAR_ES.get(p, p) for p in scores.keys()],
+                "pt": [PILLAR_PT.get(p, p) for p in scores.keys()],
+            },
+            "values": list(scores.values()),
+            "colorVars": [PILLAR_COLOR_VARS[p] for p in scores.keys()],
+            "opts": {"max": 100, "suffix": "/100"},
+        }
+
         # Build resource summary table
         resource_summary = self.data.get("discovery", {}).get("ResourceSummary", [])
         top_resources = sorted(resource_summary, key=lambda x: int(x.get("Count", 0) or 0), reverse=True)[:20]
@@ -3869,19 +4140,56 @@ class DashboardGenerator:
         for r in top_resources:
             rtype = str(r.get("type", "")).split("/")[-1] if "/" in str(r.get("type", "")) else r.get("type", "")
             resource_rows += f"<tr><td>{r.get('type', '')}</td><td>{r.get('location', '')}</td><td class='num'>{r.get('Count', 0)}</td></tr>"
-        
+
+        def render_bar_chart(items, empty_en, empty_es, max_bars=10):
+            """Horizontal bar chart reusing the same .cost-bar-* CSS already used for budgets/cost
+            breakdowns elsewhere - items is a list of (label, count) tuples, already summed."""
+            if not items:
+                return f'<p class="empty-state">{bi_empty(empty_en, empty_es)}</p>'
+            top = sorted(items, key=lambda kv: kv[1], reverse=True)[:max_bars]
+            max_val = max(v for _, v in top) or 1
+            rows_html = "".join(
+                f"""<div class="cost-bar-row">
+                    <span class="cost-bar-label">{escape(str(label))}</span>
+                    <div class="cost-bar-track"><div class="cost-bar-fill" style="width:{(v / max_val * 100):.0f}%;"></div></div>
+                    <span class="cost-bar-value">{v:,}</span>
+                </div>"""
+                for label, v in top
+            )
+            return f'<div class="cost-bar-chart">{rows_html}</div>'
+
+        resource_type_totals = defaultdict(int)
+        for r in resource_summary:
+            rtype = str(r.get("type", "")).split("/")[-1] if "/" in str(r.get("type", "")) else str(r.get("type", ""))
+            resource_type_totals[rtype or "Unknown"] += int(r.get("Count", 0) or 0)
+        resource_types_chart = render_bar_chart(
+            list(resource_type_totals.items()),
+            "No resource data found.", "No se encontraron datos de recursos.",
+        )
+
         # Advisor summary
         advisor_summary = self.data.get("advisor", {}).get("SummaryByCategory", [])
         advisor_rows = ""
         for a in advisor_summary:
             advisor_rows += f"<tr><td>{a.get('category', '')}</td><td>{a.get('impact', '')}</td><td class='num'>{a.get('Count', 0)}</td></tr>"
-        
+
+        advisor_category_totals = defaultdict(int)
+        for a in advisor_summary:
+            advisor_category_totals[str(a.get("category", "") or "Unknown")] += int(a.get("Count", 0) or 0)
+        advisor_summary_chart = render_bar_chart(
+            list(advisor_category_totals.items()),
+            "No Advisor data found.", "No se encontraron datos de Advisor.",
+        )
+
+        chart_data_json = json.dumps(chart_data)
+        chartjs_lib = self._vendor_js("chart.umd.min.js")
+
         html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
+<html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Azure WAF/CAF Workshop - Consolidated Dashboard</title>
+<title>Azure Well-Architected Framework - Consolidated Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{base64.b64encode(self._assessment_logo_svg('').encode('utf-8')).decode('ascii')}">
 <script>
     (() => {{
         const param = new URLSearchParams(window.location.search).get("scoutTheme");
@@ -3896,31 +4204,32 @@ class DashboardGenerator:
 <style>
 :root {{
     color-scheme: light;
-    --cp-bg: #f5f5f7;
+    --cp-bg: #eeeeee;
     --cp-bg-elevated: #ffffff;
     --cp-surface: #ffffff;
-    --cp-surface-soft: #f5f5f7;
+    --cp-surface-soft: #eeeeee;
     --cp-border: rgba(0, 0, 0, 0.08);
     --cp-border-strong: rgba(0, 0, 0, 0.16);
-    --cp-text: #1d1d1f;
-    --cp-text-muted: #6e6e73;
-    --cp-text-soft: #86868b;
-    --cp-accent: #0071e3;
-    --cp-accent-hover: #0077ed;
-    --cp-accent-soft: rgba(0, 113, 227, 0.08);
+    --cp-text: #000000;
+    --cp-text-muted: #666666;
+    --cp-text-soft: #979797;
+    --cp-accent: #0088cc;
+    --cp-accent-hover: #269fdb;
+    --cp-accent-soft: rgba(0, 136, 204, 0.08);
     --cp-accent-fg: #ffffff;
-    --cp-success: #1d9a4a;
-    --cp-danger: #ff3b30;
-    --cp-warning: #ff9500;
-    --cp-link: #0071e3;
+    --cp-success: #3f8f5c;
+    --cp-critical: #d0102b;
+    --cp-danger: #ff8f5f;
+    --cp-warning: #666666;
+    --cp-link: #0088cc;
     --cp-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.06);
     --cp-overlay: rgba(255, 255, 255, 0.75);
     --cp-panel: rgba(255, 255, 255, 0.72);
     --cp-panel-strong: rgba(255, 255, 255, 0.94);
     --cp-sheen: rgba(255, 255, 255, 0.6);
-    --cp-highlight: rgba(0, 113, 227, 0.1);
-    --overview-header-start: #f5f5f7;
-    --overview-header-end: #f5f5f7;
+    --cp-highlight: rgba(0, 136, 204, 0.1);
+    --overview-header-start: #eeeeee;
+    --overview-header-end: #eeeeee;
     --cp-radius-lg: 22px;
     --cp-radius-md: 16px;
     --cp-radius-sm: 12px;
@@ -3929,30 +4238,31 @@ class DashboardGenerator:
 html[data-theme="dark"] {{
     color-scheme: dark;
     --cp-bg: #000000;
-    --cp-bg-elevated: #1c1c1e;
-    --cp-surface: #1c1c1e;
-    --cp-surface-soft: #2c2c2e;
+    --cp-bg-elevated: #12192f;
+    --cp-surface: #12192f;
+    --cp-surface-soft: #1c1c1e;
     --cp-border: rgba(255, 255, 255, 0.08);
     --cp-border-strong: rgba(255, 255, 255, 0.16);
-    --cp-text: #f5f5f7;
-    --cp-text-muted: #a1a1a6;
-    --cp-text-soft: #86868b;
-    --cp-accent: #0a84ff;
-    --cp-accent-hover: #409cff;
-    --cp-accent-soft: rgba(10, 132, 255, 0.16);
+    --cp-text: #eeeeee;
+    --cp-text-muted: #979797;
+    --cp-text-soft: #666666;
+    --cp-accent: #33a3dd;
+    --cp-accent-hover: #4fb1e5;
+    --cp-accent-soft: rgba(51, 163, 221, 0.16);
     --cp-accent-fg: #ffffff;
-    --cp-success: #30d158;
-    --cp-danger: #ff453a;
-    --cp-warning: #ff9f0a;
-    --cp-link: #0a84ff;
+    --cp-success: #5aa876;
+    --cp-critical: #e8404f;
+    --cp-danger: #ff8f5f;
+    --cp-warning: #979797;
+    --cp-link: #33a3dd;
     --cp-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.4);
-    --cp-overlay: rgba(28, 28, 30, 0.75);
-    --cp-panel: rgba(28, 28, 30, 0.72);
-    --cp-panel-strong: rgba(28, 28, 30, 0.94);
+    --cp-overlay: rgba(18, 25, 47, 0.75);
+    --cp-panel: rgba(18, 25, 47, 0.72);
+    --cp-panel-strong: rgba(18, 25, 47, 0.94);
     --cp-sheen: rgba(255, 255, 255, 0.04);
-    --cp-highlight: rgba(10, 132, 255, 0.16);
-    --overview-header-start: #1c1c1e;
-    --overview-header-end: #1c1c1e;
+    --cp-highlight: rgba(51, 163, 221, 0.16);
+    --overview-header-start: #12192f;
+    --overview-header-end: #12192f;
 }}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{
@@ -4136,8 +4446,31 @@ body {{
 .cost-bar-label {{ color: var(--cp-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .cost-bar-track {{ height: 8px; border-radius: 980px; background: var(--cp-surface-soft); overflow: hidden; }}
 .cost-bar-fill {{ height: 100%; border-radius: 980px; background: linear-gradient(90deg, var(--cp-accent), var(--cp-success)); }}
+.inline-bar-wrap {{ display: flex; align-items: center; justify-content: flex-end; gap: 8px; }}
+.inline-bar-track {{ width: 60px; height: 6px; border-radius: 980px; background: var(--cp-border); overflow: hidden; }}
+.inline-bar-fill {{ height: 100%; border-radius: 980px; }}
 .cost-bar-value {{ font-weight: 700; white-space: nowrap; }}
 .cost-bar-pct {{ color: var(--cp-text-muted); text-align: right; }}
+
+/* Chart.js integration - chart cards + chart/table toggle pattern */
+.chart-card {{ background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-radius-md); padding: 16px 18px; box-shadow: var(--cp-shadow); }}
+.chart-card-body {{ position: relative; width: 100%; }}
+.chart-summary-row {{ display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }}
+.chart-summary-row .chart-card {{ min-width: 260px; }}
+.chart-table-block {{ display: flex; flex-direction: column; gap: 10px; }}
+.chart-table-toggle {{ display: inline-flex; gap: 4px; background: var(--cp-surface-soft); border-radius: 980px; padding: 3px; align-self: flex-start; }}
+.ctt-btn {{ border: none; background: transparent; color: var(--cp-text-muted); font-size: 11px; font-weight: 600; padding: 5px 14px; border-radius: 980px; cursor: pointer; transition: background 0.15s var(--cp-ease), color 0.15s var(--cp-ease); }}
+.ctt-btn.is-active {{ background: var(--cp-accent); color: var(--cp-accent-fg); }}
+.ctt-panel[hidden] {{ display: none; }}
+.chart-view-details-link {{ font-size: 11px; color: var(--cp-link); cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; align-self: flex-start; }}
+.chart-mini-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }}
+.chart-mini-title {{ font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--cp-text-muted); margin-bottom: 6px; }}
+.control-progress-list {{ display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; }}
+.control-progress-row {{ display: grid; grid-template-columns: minmax(120px, 1.2fr) 2fr auto; align-items: center; gap: 10px; font-size: 12px; }}
+.control-progress-label {{ color: var(--cp-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.control-progress-track {{ height: 8px; border-radius: 980px; background: var(--cp-surface-soft); overflow: hidden; }}
+.control-progress-fill {{ height: 100%; border-radius: 980px; }}
+.control-progress-value {{ font-weight: 700; white-space: nowrap; color: var(--cp-text-muted); }}
 @media (max-width: 1050px) {{ .security-stats {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
 @media (max-width: 760px) {{
     .view-tabs {{ width: 100%; }}
@@ -4210,10 +4543,12 @@ body {{
 }}
 .methodology-note a {{ color: var(--cp-link); }}
 .breakdown-grid {{
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
 }}
 @media (min-width: 701px) {{ .breakdown-grid {{ grid-auto-rows: 1fr; }} }}
+@media (max-width: 1100px) {{ .breakdown-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+@media (max-width: 700px) {{ .breakdown-grid {{ grid-template-columns: 1fr; }} }}
 .breakdown-card {{
     background: var(--cp-surface); border-radius: var(--cp-radius-md); padding: 18px;
     border: 1px solid var(--cp-border); box-shadow: var(--cp-shadow); min-width: 0;
@@ -4229,6 +4564,17 @@ body {{
 .cost-breakdown-card td {{ overflow-wrap: anywhere; white-space: normal; }}
 .cost-source-col {{ width: 34%; }}
 .cost-findings-col {{ width: 26%; }}
+.subcategory-table {{ table-layout: fixed; }}
+.subcategory-table td {{ overflow-wrap: break-word; white-space: normal; padding: 8px 6px; }}
+.subcategory-table th {{ overflow-wrap: normal; word-break: normal; white-space: normal; padding: 8px 6px; font-size: 10px; }}
+.subcat-name-col {{ width: 36%; }}
+.subcat-num-col {{ width: 15%; }}
+.subcat-score-col {{ width: 34%; }}
+.inline-bar-wrap {{ min-width: 0; }}
+.inline-bar-track {{ flex: 0 0 auto; }}
+.subcategory-table .inline-bar-wrap {{ gap: 4px; }}
+.subcategory-table .inline-bar-track {{ width: 30px; }}
+.subcategory-table .inline-bar-wrap span {{ font-size: 10px; white-space: nowrap; }}
 
 /* Governance view (native hierarchy tree, scope insights) */
 .resource-rec-intro {{ color: var(--cp-text-muted); font-size: 12px; margin: -6px 0 16px; max-width: 900px; }}
@@ -4535,7 +4881,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
     </div>
     <div class="header-brand">
         {self._azure_icon("azure-logo", "az-icon header-logo")}
-        <h1>{bi("Azure WAF/CAF Workshop", "Taller Azure WAF/CAF", "Workshop Azure WAF/CAF")}<span class="header-title-sub">{bi("Discovery Report", "Informe de Descubrimiento", "Relatório de Descoberta")}</span></h1>
+        <h1>{bi("Azure Well-Architected Framework", "Azure Well-Architected Framework", "Azure Well-Architected Framework")}<span class="header-title-sub">{bi("Discovery Report", "Informe de Descubrimiento", "Relatório de Descoberta")}</span></h1>
     </div>
     <div class="subtitle">{bi("Generated", "Generado", "Gerado")}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {bi("Consolidated view across all discovery phases", "Vista consolidada de todas las fases de descubrimiento", "Visão consolidada de todas as fases de descoberta")}</div>
 </div>
@@ -4568,6 +4914,12 @@ body.lang-pt .i18n-pt {{ display: inline; }}
     </div>
 </div>
 
+<!-- WAF Pillar Scores comparison chart -->
+<div class="section chart-card">
+    <div class="section-title">{bi("WAF Pillar Scores", "Puntajes por Pilar WAF", "Pontuações por Pilar WAF")}{it("Side-by-side comparison of all pillar scores.", "Comparaci\u00f3n lado a lado de los puntajes de todos los pilares.", "Comparação lado a lado das pontuações de todos os pilares.")}</div>
+    <div class="chart-card-body" style="height:220px;"><canvas id="pillarScoresChart"></canvas></div>
+</div>
+
 <!-- Stats Row -->
 <div class="stats-row">
     <div class="stat-box"><div class="value">{total_subs}</div><div class="label">{bi("Subscriptions", "Suscripciones", "Assinaturas")}</div></div>
@@ -4578,7 +4930,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 
 <!-- Score Methodology -->
 <div class="section">
-    <div class="section-title">📐 {bi("Score Methodology (Microsoft Advisor Score model)", "Metodolog\u00eda de Puntuaci\u00f3n (modelo de Azure Advisor Score)", "Metodologia de Pontuação (modelo do Azure Advisor Score)")}{it("Explains how each pillar score (0-100) is calculated from Advisor recommendation subcategories and weights.", "Explica c\u00f3mo se calcula el puntaje de cada pilar (0-100) a partir de las subcategor\u00edas y pesos de las recomendaciones de Advisor.", "Explica como a pontuação de cada pilar (0-100) é calculada a partir das subcategorias e pesos das recomendações do Advisor.")}</div>
+    <div class="section-title">{bi("Score Methodology (Microsoft Advisor Score model)", "Metodolog\u00eda de Puntuaci\u00f3n (modelo de Azure Advisor Score)", "Metodologia de Pontuação (modelo do Azure Advisor Score)")}{it("Explains how each pillar score (0-100) is calculated from Advisor recommendation subcategories and weights.", "Explica c\u00f3mo se calcula el puntaje de cada pilar (0-100) a partir de las subcategor\u00edas y pesos de las recomendaciones de Advisor.", "Explica como a pontuação de cada pilar (0-100) é calculada a partir das subcategorias e pesos das recomendações do Advisor.")}</div>
     <div class="methodology-note">
         {bi("Pillar scores follow the official", "Los puntajes de cada pilar siguen la f\u00f3rmula oficial de", "As pontuações de cada pilar seguem a fórmula oficial do")} <a href="https://learn.microsoft.com/en-us/azure/advisor/advisor-score#calculation-of-advisor-score" target="_blank">Azure Advisor Score</a>
         {bi(
@@ -4613,8 +4965,22 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 
 <!-- Action Items -->
 <div class="section">
+    <div class="chart-summary-row">
+        <div class="chart-card" style="flex:1;">
+            <div class="section-title" style="font-size:14px;">{bi('Recommendations by Severity', 'Recomendaciones por Severidad', 'Recomendações por Severidade')}</div>
+            <div class="chart-card-body" style="height:180px;">
+                {f'<canvas id="actionSeverityChart"></canvas>' if severity_present else f'<p class="empty-state">{bi_empty("No action items found.", "No se encontraron elementos de acci\u00f3n.")}</p>'}
+            </div>
+        </div>
+        <div class="chart-card" style="flex:1;">
+            <div class="section-title" style="font-size:14px;">{bi('Recommendations by WAF Pillar', 'Recomendaciones por Pilar WAF', 'Recomendações por Pilar WAF')}</div>
+            <div class="chart-card-body" style="height:180px;">
+                {f'<canvas id="actionByPillarChart"></canvas>' if pillars_with_actions else f'<p class="empty-state">{bi_empty("No action items found.", "No se encontraron elementos de acci\u00f3n.")}</p>'}
+            </div>
+        </div>
+    </div>
     <div class="section-title-row">
-        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">🎯 {bi('Action Items', 'Elementos de Acci\u00f3n', 'Itens de Ação')} (<span id="actionItemsCount">{total_actions}</span>){it('Consolidated, prioritized list of action items across all pillars - add, resolve, or dismiss items directly from here.', 'Lista consolidada y priorizada de elementos de acci\u00f3n de todos los pilares: agrega, resuelve o descarta elementos directamente aqu\u00ed.', 'Lista consolidada e priorizada de itens de ação de todos os pilares - adicione, resolva ou descarte itens diretamente aqui.')}</div>
+        <div class="section-title" style="border-bottom:none; padding-bottom:0; margin-bottom:0;">{bi('Action Items', 'Elementos de Acci\u00f3n', 'Itens de Ação')} (<span id="actionItemsCount">{total_actions}</span>){it('Consolidated, prioritized list of action items across all pillars - add, resolve, or dismiss items directly from here.', 'Lista consolidada y priorizada de elementos de acci\u00f3n de todos los pilares: agrega, resuelve o descarta elementos directamente aqu\u00ed.', 'Lista consolidada e priorizada de itens de ação de todos os pilares - adicione, resolva ou descarte itens diretamente aqui.')}</div>
         <div class="action-toolbar">
             <button id="addActionBtn" class="btn-add-action" type="button">+ {bi('Add action item', 'Agregar elemento', 'Adicionar item')}</button>
             <button id="toggleDismissedBtn" class="btn-link" type="button"
@@ -4627,7 +4993,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
     <div id="severityFilterBar" class="severity-filter-bar">
         <span class="severity-filter-label">{bi('Filter by severity:', 'Filtrar por severidad:', 'Filtrar por severidade:')}</span>
         <button type="button" class="severity-chip is-active" data-severity="all">{bi('All', 'Todos', 'Todos')}</button>
-        <button type="button" class="severity-chip" data-severity="critical" style="--chip-color: var(--cp-danger);">{bi('Critical', 'Cr\u00edtico', 'Crítico')}</button>
+        <button type="button" class="severity-chip" data-severity="critical" style="--chip-color: var(--cp-critical);">{bi('Critical', 'Cr\u00edtico', 'Crítico')}</button>
         <button type="button" class="severity-chip" data-severity="high" style="--chip-color: var(--cp-danger);">{bi('High', 'Alto', 'Alto')}</button>
         <button type="button" class="severity-chip" data-severity="medium" style="--chip-color: var(--cp-warning);">{bi('Medium', 'Medio', 'Médio')}</button>
         <button type="button" class="severity-chip" data-severity="low" style="--chip-color: var(--cp-link);">{bi('Low', 'Bajo', 'Baixo')}</button>
@@ -4680,14 +5046,16 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 <!-- Data Summary Tables -->
 <div class="data-grid">
     <div class="table-card">
-        <h3>📦 {bi("Top Resource Types", "Principales Tipos de Recursos", "Principais Tipos de Recursos")}</h3>
+        <h3>{bi("Top Resource Types", "Principales Tipos de Recursos", "Principais Tipos de Recursos")}</h3>
+        {resource_types_chart}
         <table>
             <thead><tr><th>{bi("Resource Type", "Tipo de Recurso", "Tipo de Recurso")}</th><th>{bi("Location", "Ubicaci\u00f3n", "Localização")}</th><th>{bi("Count", "Cantidad", "Quantidade")}</th></tr></thead>
             <tbody>{resource_rows}</tbody>
         </table>
     </div>
     <div class="table-card">
-        <h3>💡 {bi("Advisor Summary", "Resumen de Advisor", "Resumo do Advisor")}</h3>
+        <h3>{bi("Advisor Summary", "Resumen de Advisor", "Resumo do Advisor")}</h3>
+        {advisor_summary_chart}
         <table>
             <thead><tr><th>{bi("Category", "Categor\u00eda", "Categoria")}</th><th>{bi("Impact", "Impacto", "Impacto")}</th><th>{bi("Count", "Cantidad", "Quantidade")}</th></tr></thead>
             <tbody>{advisor_rows}</tbody>
@@ -4722,11 +5090,270 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 
 <!-- Footer -->
 <div class="footer">
-    {bi("Azure WAF/CAF Workshop Discovery Report | Generated by Azure Governance Discovery Toolkit", "Informe de Descubrimiento del Taller Azure WAF/CAF | Generado por Azure Governance Discovery Toolkit", "Relatório de Descoberta do Workshop Azure WAF/CAF | Gerado pelo Azure Governance Discovery Toolkit")}<br>
+    {bi("Azure Well-Architected Framework Discovery Report | Generated by Azure Governance Discovery Toolkit", "Informe de Descubrimiento Azure Well-Architected Framework | Generado por Azure Governance Discovery Toolkit", "Relatório de Descoberta Azure Well-Architected Framework | Gerado pelo Azure Governance Discovery Toolkit")}<br>
     {bi("This report consolidates findings from Resource Discovery, Azure Advisor, Metrics Analysis, and Governance Visualization.", "Este informe consolida los hallazgos de Resource Discovery, Azure Advisor, An\u00e1lisis de M\u00e9tricas y Visualizaci\u00f3n de Gobernanza.", "Este relatório consolida os achados do Resource Discovery, Azure Advisor, Análise de Métricas e Visualização de Governança.")}
 </div>
 
 </div>
+<script>
+{chartjs_lib}
+</script>
+<script>
+window.WAF_CHART_DATA = {chart_data_json};
+function cssVar(name) {{ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }}
+function resolveColorVars(vars_) {{ return (vars_ || []).map(cssVar); }}
+function currentChartLang() {{
+    return document.body.classList.contains('lang-es') ? 'es' : (document.body.classList.contains('lang-pt') ? 'pt' : 'en');
+}}
+function labelsFor(i18nLabels) {{
+    if (!i18nLabels) return [];
+    return i18nLabels[currentChartLang()] || i18nLabels.en || [];
+}}
+window.__wafCharts = {{}};
+function registerChart(id, chart, meta) {{
+    window.__wafCharts[id] = {{ chart: chart, meta: meta || {{}} }};
+    return chart;
+}}
+function destroyChart(id) {{
+    var entry = window.__wafCharts[id];
+    if (entry && entry.chart) {{ entry.chart.destroy(); }}
+    delete window.__wafCharts[id];
+}}
+function baseChartOptions(extra) {{
+    var c = {{ text: cssVar('--cp-text'), muted: cssVar('--cp-text-muted'), border: cssVar('--cp-border'), surface: cssVar('--cp-surface') }};
+    var opts = {{
+        responsive: true, maintainAspectRatio: false,
+        animation: {{ duration: 250 }},
+        plugins: {{
+            legend: {{ display: false, labels: {{ color: c.text, font: {{ size: 11 }} }} }},
+            tooltip: {{
+                backgroundColor: c.surface, titleColor: c.text, bodyColor: c.text,
+                borderColor: c.border, borderWidth: 1, padding: 10, cornerRadius: 8, displayColors: true
+            }}
+        }},
+        scales: {{}}
+    }};
+    if (extra) {{
+        Object.keys(extra).forEach(function(k) {{
+            if (k === 'plugins' && extra.plugins) {{
+                Object.keys(extra.plugins).forEach(function(pk) {{
+                    opts.plugins[pk] = Object.assign({{}}, opts.plugins[pk], extra.plugins[pk]);
+                }});
+            }} else {{
+                opts[k] = extra[k];
+            }}
+        }});
+    }}
+    return opts;
+}}
+function createHorizontalBarChart(canvasId, i18nLabels, values, colorVars, opts) {{
+    var ctx = document.getElementById(canvasId);
+    if (!ctx || typeof Chart === 'undefined') return null;
+    opts = opts || {{}};
+    var labels = labelsFor(i18nLabels);
+    var c = {{ border: cssVar('--cp-border'), muted: cssVar('--cp-text-muted'), text: cssVar('--cp-text') }};
+    var chart = new Chart(ctx, {{
+        type: 'bar',
+        data: {{ labels: labels, datasets: [{{ data: values, backgroundColor: resolveColorVars(colorVars), borderRadius: 6, maxBarThickness: 22 }}] }},
+        options: baseChartOptions({{
+            indexAxis: 'y',
+            scales: {{
+                x: {{
+                    beginAtZero: true, max: opts.max, grid: {{ color: c.border }}, ticks: {{
+                        color: c.muted,
+                        callback: opts.currency ? function(v) {{ return '$' + Number(v).toLocaleString(); }} : undefined
+                    }}
+                }},
+                y: {{ grid: {{ display: false }}, ticks: {{ color: c.text }} }}
+            }},
+            plugins: {{
+                tooltip: {{ callbacks: opts.currency ? {{ label: function(ctx) {{ return '$' + Number(ctx.parsed.x).toLocaleString(); }} }} : undefined }}
+            }}
+        }})
+    }});
+    if (opts.onClick) {{
+        ctx.onclick = function(evt) {{
+            var points = chart.getElementsAtEventForMode(evt, 'nearest', {{ intersect: true }}, true);
+            if (points.length) opts.onClick(points[0].index, labels[points[0].index]);
+        }};
+    }}
+    return registerChart(canvasId, chart, {{ type: 'hbar', i18nLabels: i18nLabels, colorVars: colorVars }});
+}}
+function createDonutChart(canvasId, i18nLabels, values, colorVars, opts) {{
+    var ctx = document.getElementById(canvasId);
+    if (!ctx || typeof Chart === 'undefined') return null;
+    opts = opts || {{}};
+    var labels = labelsFor(i18nLabels);
+    var c = {{ text: cssVar('--cp-text'), surface: cssVar('--cp-surface') }};
+    var chart = new Chart(ctx, {{
+        type: 'doughnut',
+        data: {{ labels: labels, datasets: [{{ data: values, backgroundColor: resolveColorVars(colorVars), borderColor: c.surface, borderWidth: 2 }}] }},
+        options: baseChartOptions({{
+            cutout: '65%',
+            plugins: {{ legend: {{ display: true, position: 'right', labels: {{ color: c.text, font: {{ size: 11 }}, boxWidth: 10, padding: 8 }} }} }}
+        }})
+    }});
+    if (opts.onClick) {{
+        ctx.onclick = function(evt) {{
+            var points = chart.getElementsAtEventForMode(evt, 'nearest', {{ intersect: true }}, true);
+            if (points.length) opts.onClick(points[0].index, labels[points[0].index]);
+        }};
+    }}
+    return registerChart(canvasId, chart, {{ type: 'donut', i18nLabels: i18nLabels, colorVars: colorVars }});
+}}
+function createLineChart(canvasId, i18nLabels, datasets, opts) {{
+    var ctx = document.getElementById(canvasId);
+    if (!ctx || typeof Chart === 'undefined') return null;
+    opts = opts || {{}};
+    var labels = labelsFor(i18nLabels);
+    var lang = currentChartLang();
+    var c = {{ border: cssVar('--cp-border'), muted: cssVar('--cp-text-muted'), accent: cssVar('--cp-accent'), text: cssVar('--cp-text') }};
+    var chartDatasets = (datasets || []).map(function(ds) {{
+        var color = ds.colorVar ? cssVar(ds.colorVar) : (ds.color || c.accent);
+        return {{
+            label: ds.label ? (ds.label[lang] || ds.label.en) : '',
+            data: ds.data, borderColor: color, backgroundColor: color + '33',
+            fill: !!ds.fill, tension: 0.3,
+            borderDash: ds.dashed ? [6, 4] : undefined,
+            pointRadius: 3, pointBackgroundColor: color
+        }};
+    }});
+    var chart = new Chart(ctx, {{
+        type: 'line',
+        data: {{ labels: labels, datasets: chartDatasets }},
+        options: baseChartOptions({{
+            scales: {{
+                x: {{ grid: {{ color: c.border }}, ticks: {{ color: c.muted }} }},
+                y: {{
+                    beginAtZero: true, grid: {{ color: c.border }}, ticks: {{
+                        color: c.muted,
+                        callback: opts.currency ? function(v) {{ return '$' + Number(v).toLocaleString(); }} : undefined
+                    }}
+                }}
+            }},
+            plugins: {{
+                legend: {{ display: (datasets || []).length > 1, labels: {{ color: c.text }} }},
+                tooltip: {{ callbacks: opts.currency ? {{ label: function(ctx) {{ return (ctx.dataset.label ? ctx.dataset.label + ': ' : '') + '$' + Number(ctx.parsed.y).toLocaleString(); }} }} : undefined }}
+            }}
+        }})
+    }});
+    return registerChart(canvasId, chart, {{ type: 'line', i18nLabels: i18nLabels, datasets: datasets }});
+}}
+function createStackedBarChart(canvasId, i18nLabels, series, opts) {{
+    var ctx = document.getElementById(canvasId);
+    if (!ctx || typeof Chart === 'undefined') return null;
+    opts = opts || {{}};
+    var labels = labelsFor(i18nLabels);
+    var lang = currentChartLang();
+    var c = {{ border: cssVar('--cp-border'), muted: cssVar('--cp-text-muted'), text: cssVar('--cp-text') }};
+    var chartDatasets = (series || []).map(function(s) {{
+        return {{ label: s.label ? (s.label[lang] || s.label.en) : '', data: s.data, backgroundColor: resolveColorVars([s.colorVar])[0], borderRadius: 4 }};
+    }});
+    var chart = new Chart(ctx, {{
+        type: 'bar',
+        data: {{ labels: labels, datasets: chartDatasets }},
+        options: baseChartOptions({{
+            indexAxis: opts.horizontal ? 'y' : 'x',
+            scales: {{
+                x: {{ stacked: true, grid: {{ color: c.border }}, ticks: {{ color: c.muted }} }},
+                y: {{ stacked: true, grid: {{ color: c.border }}, ticks: {{ color: c.text }} }}
+            }},
+            plugins: {{ legend: {{ display: true, labels: {{ color: c.text, font: {{ size: 11 }} }} }} }}
+        }})
+    }});
+    return registerChart(canvasId, chart, {{ type: 'stacked', i18nLabels: i18nLabels, series: series }});
+}}
+function updateAllChartsTheme() {{
+    Object.keys(window.__wafCharts || {{}}).forEach(function(id) {{
+        var entry = window.__wafCharts[id];
+        var chart = entry.chart, meta = entry.meta || {{}};
+        if (!chart) return;
+        var c = {{ text: cssVar('--cp-text'), muted: cssVar('--cp-text-muted'), border: cssVar('--cp-border'), surface: cssVar('--cp-surface') }};
+        if (chart.options.scales) {{
+            Object.keys(chart.options.scales).forEach(function(axis) {{
+                var scale = chart.options.scales[axis];
+                if (scale.grid) scale.grid.color = c.border;
+                if (scale.ticks) scale.ticks.color = (axis === 'y') ? c.text : c.muted;
+            }});
+        }}
+        if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {{
+            chart.options.plugins.legend.labels.color = c.text;
+        }}
+        if (chart.options.plugins && chart.options.plugins.tooltip) {{
+            chart.options.plugins.tooltip.backgroundColor = c.surface;
+            chart.options.plugins.tooltip.titleColor = c.text;
+            chart.options.plugins.tooltip.bodyColor = c.text;
+            chart.options.plugins.tooltip.borderColor = c.border;
+        }}
+        if (meta.colorVars && chart.data.datasets[0]) {{
+            chart.data.datasets[0].backgroundColor = resolveColorVars(meta.colorVars);
+        }}
+        if (chart.config.type === 'doughnut' && chart.data.datasets[0]) {{
+            chart.data.datasets[0].borderColor = c.surface;
+        }}
+        chart.update('none');
+    }});
+}}
+function refreshAllChartLabels() {{
+    var lang = currentChartLang();
+    Object.keys(window.__wafCharts || {{}}).forEach(function(id) {{
+        var entry = window.__wafCharts[id];
+        var chart = entry.chart, meta = entry.meta || {{}};
+        if (!chart || !meta.i18nLabels) return;
+        chart.data.labels = meta.i18nLabels[lang] || meta.i18nLabels.en;
+        if (meta.datasets) {{
+            chart.data.datasets.forEach(function(ds, idx) {{
+                if (meta.datasets[idx] && meta.datasets[idx].label) {{
+                    ds.label = meta.datasets[idx].label[lang] || meta.datasets[idx].label.en;
+                }}
+            }});
+        }}
+        if (meta.series) {{
+            chart.data.datasets.forEach(function(ds, idx) {{
+                if (meta.series[idx] && meta.series[idx].label) {{
+                    ds.label = meta.series[idx].label[lang] || meta.series[idx].label.en;
+                }}
+            }});
+        }}
+        chart.update('none');
+    }});
+}}
+function isEffectivelyHidden(el) {{
+    while (el) {{
+        if (el.hidden || getComputedStyle(el).display === 'none') return true;
+        el = el.parentElement;
+    }}
+    return false;
+}}
+function initAllCharts() {{
+    if (typeof Chart === 'undefined' || !window.WAF_CHART_DATA) return;
+    Object.keys(window.WAF_CHART_DATA).forEach(function(key) {{
+        var cfg = window.WAF_CHART_DATA[key];
+        if (!cfg || window.__wafCharts[cfg.canvasId]) return;
+        var canvas = document.getElementById(cfg.canvasId);
+        // Chart.js permanently zero-sizes a canvas created while its container chain is
+        // hidden (display:none tab panels) - defer creation until the tab becomes visible
+        // (setDashboardView calls initAllCharts() again on every view switch).
+        if (!canvas || isEffectivelyHidden(canvas)) return;
+        if (cfg.type === 'hbar') createHorizontalBarChart(cfg.canvasId, cfg.labels, cfg.values, cfg.colorVars, cfg.opts);
+        else if (cfg.type === 'donut') createDonutChart(cfg.canvasId, cfg.labels, cfg.values, cfg.colorVars, cfg.opts);
+        else if (cfg.type === 'line') createLineChart(cfg.canvasId, cfg.labels, cfg.datasets, cfg.opts);
+        else if (cfg.type === 'stacked') createStackedBarChart(cfg.canvasId, cfg.labels, cfg.series, cfg.opts);
+    }});
+}}
+document.addEventListener('click', function(e) {{
+    var btn = e.target.closest('.ctt-btn');
+    if (!btn) return;
+    var block = btn.closest('.chart-table-block');
+    if (!block) return;
+    var view = btn.getAttribute('data-view');
+    block.querySelectorAll('.ctt-btn').forEach(function(b) {{ b.classList.toggle('is-active', b === btn); }});
+    var chartPanel = block.querySelector('.ctt-chart');
+    var tablePanel = block.querySelector('.ctt-table');
+    if (chartPanel) chartPanel.hidden = view !== 'chart';
+    if (tablePanel) tablePanel.hidden = view !== 'table';
+}});
+</script>
 <script>
 function updateThemeButton() {{
     var btn = document.getElementById('themeToggleBtn');
@@ -4749,6 +5376,7 @@ function setTheme(theme, persist) {{
         try {{ localStorage.setItem('wafDashboardTheme', normalized); }} catch (e) {{}}
     }}
     updateThemeButton();
+    if (typeof updateAllChartsTheme === 'function') updateAllChartsTheme();
 }}
 function toggleTheme() {{
     setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
@@ -4765,6 +5393,7 @@ function setLang(lang) {{
     updateThemeButton();
     try {{ localStorage.setItem('wafDashboardLang', lang); }} catch (e) {{}}
     moveTabThumb(currentDashboardView, true);
+    if (typeof refreshAllChartLabels === 'function') refreshAllChartLabels();
 }}
 function toggleLang() {{
     var current = document.body.classList.contains('lang-es') ? 'es' : (document.body.classList.contains('lang-pt') ? 'pt' : 'en');
@@ -5108,6 +5737,13 @@ function setDashboardView(view, animate) {{
     currentDashboardView = normalized;
     moveTabThumb(normalized, !animate);
     try {{ localStorage.setItem('wafDashboardView', normalized); }} catch (e) {{}}
+    window.setTimeout(function() {{
+        if (typeof initAllCharts === 'function') initAllCharts();
+        Object.keys(window.__wafCharts || {{}}).forEach(function(id) {{
+            var entry = window.__wafCharts[id];
+            if (entry && entry.chart) {{ entry.chart.resize(); }}
+        }});
+    }}, animate ? 200 : 0);
 }}
 window.addEventListener('resize', function() {{ moveTabThumb(currentDashboardView, true); }});
 
@@ -5135,7 +5771,7 @@ function recalcAllDiagramBoxes() {{
 /* ---- Action items: dismiss (persisted) + manually-added custom items (client-side only, localStorage) ---- */
 var ACTION_DISMISSED_KEY = 'wafDismissedActions';
 var ACTION_CUSTOM_KEY = 'wafCustomActions';
-var SEVERITY_COLORS_JS = {{"critical": "var(--cp-danger)", "high": "var(--cp-danger)", "medium": "var(--cp-warning)", "low": "var(--cp-link)", "info": "var(--cp-success)"}};
+var SEVERITY_COLORS_JS = {{"critical": "var(--cp-critical)", "high": "var(--cp-danger)", "medium": "var(--cp-warning)", "low": "var(--cp-link)", "info": "var(--cp-success)"}};
 var PILLAR_NAMES_ES = {{"Reliability": "Confiabilidad", "Security": "Seguridad", "Cost Optimization": "Optimizaci\u00f3n de Costos", "Operational Excellence": "Excelencia Operativa", "Performance Efficiency": "Eficiencia de Rendimiento", "Governance": "Gobernanza"}};
 var PILLAR_NAMES_PT = {{"Reliability": "Confiabilidade", "Security": "Seguran\u00e7a", "Cost Optimization": "Otimiza\u00e7\u00e3o de Custos", "Operational Excellence": "Excel\u00eancia Operacional", "Performance Efficiency": "Efici\u00eancia de Desempenho", "Governance": "Governan\u00e7a"}};
 var showDismissedActions = false;
@@ -5347,6 +5983,7 @@ if (toggleDismissedBtn) {{
     initTableFilters();
     initCostPivotBlocks();
     initGlobalSubscriptionFilter();
+    initAllCharts();
 }})();
 </script>
 </body>
