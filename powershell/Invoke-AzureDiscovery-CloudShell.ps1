@@ -44,8 +44,8 @@ function Invoke-SearchAzGraphWithRetry {
 }
 
 # ─── Query runner with pagination ────────────────────────────────────────────
-function Run-Query {
-    param([string]$Query, [string]$Sheet)
+function Get-GraphRows {
+    param([string]$Query)
     $all = @(); $skip = $null
     do {
         $p = @{ Query = $Query; Subscription = $subscriptionIds; First = 1000 }
@@ -54,11 +54,21 @@ function Run-Query {
         $all += $r.Data
         $skip = $r.SkipToken
     } while ($skip)
+    return $all
+}
 
+function Write-Sheet {
+    param([object[]]$Rows, [string]$Sheet)
+    $all = @($Rows)
     if ($all.Count -eq 0) { $all = @([PSCustomObject]@{ Result = "No resources found" }) }
     $all | Export-Excel -Path $outputFile -WorksheetName $Sheet -AutoSize -AutoFilter -FreezeTopRow -BoldTopRow -TableStyle Medium6
     Write-Host "  [$Sheet] $($all.Count) rows" -ForegroundColor Gray
     return $all
+}
+
+function Run-Query {
+    param([string]$Query, [string]$Sheet)
+    return Write-Sheet -Rows @(Get-GraphRows -Query $Query) -Sheet $Sheet
 }
 
 Write-Host "`n=== Azure WAF/CAF Discovery ===" -ForegroundColor Cyan
@@ -169,6 +179,100 @@ resources
 | project id, name, resourceGroup, subscriptionId, location, ip, allocation, skuName, associatedTo, tags
 | order by name asc'
 
+# Which VNets actually host internet-reachable public IPs (used to prioritize DDoS Protection findings).
+# Resource Graph can't express this in one query (no `let`, max 3 union/join/mv-expand), so each
+# exposure path is queried separately and merged here. A failure only skips the sheet; the
+# dashboard then falls back to its default DDoS severity.
+try {
+    $vnetOf = { param($subnetId) ([string]$subnetId -split '/subnets/')[0].ToLowerInvariant() }
+    $links = [System.Collections.Generic.List[object]]::new()
+    $addLinks = {
+        param($rows, $via)
+        foreach ($row in $rows) {
+            $links.Add([PSCustomObject]@{
+                VNetId = & $vnetOf $row.subnetId
+                PublicIpId = ([string]$row.publicIpId).ToLowerInvariant()
+                Via = if ($row.via) { $row.via } else { $via }
+            })
+        }
+    }
+
+    & $addLinks (Get-GraphRows -Query '
+resources
+| where type =~ "microsoft.network/networkinterfaces"
+| mv-expand ipc = properties.ipConfigurations
+| extend subnetId = tostring(ipc.properties.subnet.id), publicIpId = tostring(ipc.properties.publicIPAddress.id)
+| where isnotempty(subnetId) and isnotempty(publicIpId)
+| project subnetId, publicIpId') 'Network interface'
+
+    & $addLinks (Get-GraphRows -Query '
+resources
+| where type =~ "microsoft.network/applicationgateways"
+| extend subnetId = tostring(properties.gatewayIPConfigurations[0].properties.subnet.id)
+| mv-expand fe = properties.frontendIPConfigurations
+| extend publicIpId = tostring(fe.properties.publicIPAddress.id)
+| where isnotempty(subnetId) and isnotempty(publicIpId)
+| project subnetId, publicIpId') 'Application Gateway'
+
+    & $addLinks (Get-GraphRows -Query '
+resources
+| where type in~ ("microsoft.network/azurefirewalls", "microsoft.network/bastionhosts", "microsoft.network/virtualnetworkgateways")
+| mv-expand ipc = properties.ipConfigurations
+| extend subnetId = tostring(ipc.properties.subnet.id), publicIpId = tostring(ipc.properties.publicIPAddress.id),
+         via = case(type =~ "microsoft.network/azurefirewalls", "Azure Firewall", type =~ "microsoft.network/bastionhosts", "Azure Bastion", "Virtual network gateway")
+| where isnotempty(subnetId) and isnotempty(publicIpId)
+| project subnetId, publicIpId, via') 'Edge service'
+
+    # Public load balancers expose the VNets that host their backend pool members (NICs and VMSS/AKS nodes).
+    $lbFrontends = @{}
+    foreach ($row in (Get-GraphRows -Query '
+resources
+| where type =~ "microsoft.network/loadbalancers"
+| mv-expand fe = properties.frontendIPConfigurations
+| extend publicIpId = tostring(fe.properties.publicIPAddress.id)
+| where isnotempty(publicIpId)
+| project lbId = tolower(id), publicIpId')) {
+        if (-not $lbFrontends.ContainsKey($row.lbId)) { $lbFrontends[$row.lbId] = [System.Collections.Generic.List[string]]::new() }
+        $lbFrontends[$row.lbId].Add([string]$row.publicIpId)
+    }
+    $lbMembers = @()
+    $lbMembers += Get-GraphRows -Query '
+resources
+| where type =~ "microsoft.network/networkinterfaces"
+| mv-expand ipc = properties.ipConfigurations
+| mv-expand pool = ipc.properties.loadBalancerBackendAddressPools
+| extend subnetId = tostring(ipc.properties.subnet.id), lbId = tolower(tostring(split(tostring(pool.id), "/backendAddressPools/")[0]))
+| where isnotempty(subnetId) and isnotempty(lbId)
+| project subnetId, lbId'
+    $lbMembers += Get-GraphRows -Query '
+resources
+| where type =~ "microsoft.compute/virtualmachinescalesets"
+| mv-expand nic = properties.virtualMachineProfile.networkProfile.networkInterfaceConfigurations
+| mv-expand ipc = nic.properties.ipConfigurations
+| mv-expand pool = ipc.properties.loadBalancerBackendAddressPools
+| extend subnetId = tostring(ipc.properties.subnet.id), lbId = tolower(tostring(split(tostring(pool.id), "/backendAddressPools/")[0]))
+| where isnotempty(subnetId) and isnotempty(lbId)
+| project subnetId, lbId'
+    foreach ($member in $lbMembers) {
+        if ($lbFrontends.ContainsKey($member.lbId)) {
+            foreach ($publicIpId in $lbFrontends[$member.lbId]) {
+                $links.Add([PSCustomObject]@{ VNetId = & $vnetOf $member.subnetId; PublicIpId = $publicIpId.ToLowerInvariant(); Via = 'Public load balancer' })
+            }
+        }
+    }
+
+    $exposure = @($links | Group-Object VNetId | ForEach-Object {
+        [PSCustomObject]@{
+            VNetId = $_.Name
+            VNetName = ($_.Name -split '/')[-1]
+            PublicIPCount = @($_.Group.PublicIpId | Sort-Object -Unique).Count
+            ExposedVia = (@($_.Group.Via | Sort-Object -Unique) -join ', ')
+        }
+    } | Sort-Object VNetName)
+    Write-Sheet -Rows $exposure -Sheet "VNetPublicExposure" | Out-Null
+} catch {
+    Write-Host "  [VNetPublicExposure] skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow
+}
 Run-Query -Sheet "DNS" -Query '
 resources
 | where type in ("microsoft.network/dnszones", "microsoft.network/privatednszones")

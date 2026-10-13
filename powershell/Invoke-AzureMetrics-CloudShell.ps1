@@ -31,6 +31,13 @@ if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
 Import-Module ImportExcel
 Import-Module Az.Monitor
 
+# Keep direct phase runs readable without changing the user's persistent Az configuration.
+try {
+    Update-AzConfig -DisplayBreakingChangeWarning $false -AppliesTo Az.Monitor -Scope Process -ErrorAction Stop | Out-Null
+} catch {
+    Write-Warning "Could not suppress Az.Monitor future breaking-change notices for this run: $($_.Exception.Message)"
+}
+
 function Export-Sheet {
     param([object[]]$Data, [string]$Sheet)
     if ($Data.Count -eq 0) { $Data = @([PSCustomObject]@{ Result = "No data found" }) }

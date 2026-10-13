@@ -12,7 +12,7 @@ Usage:
     (e.g., ~/AzureWorkshop_20260730_110000)
 
 Requirements:
-    pip install openpyxl  (usually pre-installed in Cloud Shell)
+    pip install openpyxl xlrd  (usually pre-installed in Cloud Shell)
 """
 
 import sys
@@ -21,6 +21,7 @@ import json
 import re
 import hashlib
 import base64
+import math
 from collections import defaultdict
 from datetime import datetime
 from html import escape
@@ -40,6 +41,11 @@ except ImportError:
     os.system("pip install openpyxl --quiet")
     from openpyxl import load_workbook
     from openpyxl.utils.exceptions import InvalidFileException
+
+try:
+    import xlrd
+except ImportError:
+    xlrd = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -394,6 +400,51 @@ def _resource_link_attr(row: dict) -> str:
 # DATA READER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_SUBSCRIPTION_ID_RE = re.compile(r"/subscriptions/([0-9a-fA-F-]{36})")
+
+
+def subscription_name_map(data: dict) -> dict:
+    """Lowercased subscription id -> display name, from the Discovery/Governance Subscriptions sheets."""
+    names = {}
+    for phase in ("discovery", "governance"):
+        for row in data.get(phase, {}).get("Subscriptions", []):
+            sub_id = str(row.get("subscriptionId") or row.get("SubscriptionId") or "").lower()
+            if sub_id and row.get("name"):
+                names.setdefault(sub_id, str(row["name"]))
+    return names
+
+
+def resolve_subscription_name(row: dict, names: dict) -> str:
+    """Display name of the subscription a workbook row belongs to ('' when it can't be determined).
+    Rows may carry a name, a GUID, a separate subscriptionId, or only an ARM resource id."""
+    current = str(row.get("Subscription") or "").strip()
+    if current and current.lower() not in names:
+        return current
+    sub_id = current.lower() or str(row.get("subscriptionId") or row.get("SubscriptionId") or "").lower()
+    if not sub_id:
+        for key in ("ResourceId", "id", "resourceId"):
+            match = _SUBSCRIPTION_ID_RE.search(str(row.get(key) or ""))
+            if match:
+                sub_id = match.group(1).lower()
+                break
+    return names.get(sub_id, "")
+
+
+def attach_subscription_names(data: dict) -> dict:
+    """Give every row that belongs to a known subscription a friendly `Subscription` value, so
+    tables show names (not GUIDs) and the dashboard-wide subscription filter can match them."""
+    names = subscription_name_map(data)
+    if not names:
+        return data
+    for sheets in data.values():
+        for rows in sheets.values():
+            for row in rows:
+                name = resolve_subscription_name(row, names)
+                if name:
+                    row["Subscription"] = name
+    return data
+
+
 class ExcelReader:
     """Reads Excel workbooks and returns structured data."""
 
@@ -416,6 +467,10 @@ class ExcelReader:
         try:
             wb = load_workbook(path, read_only=True, data_only=True)
         except (BadZipFile, InvalidFileException, OSError) as exc:
+            legacy = ExcelReader._read_legacy_workbook(path)
+            if legacy is not None:
+                print(f"  ! Read legacy Excel workbook with .xlsx extension: {path}")
+                return legacy
             print(f"  ! Skipping invalid workbook {path}: {exc}")
             return {}
         result = {}
@@ -438,6 +493,39 @@ class ExcelReader:
             result[sheet_name] = data
         
         wb.close()
+        return result
+
+    @staticmethod
+    def _read_legacy_workbook(path: str) -> Optional[dict]:
+        """Read an Excel 97-2003 workbook whose filename may incorrectly end in .xlsx."""
+        if xlrd is None:
+            return None
+        try:
+            workbook = xlrd.open_workbook(path, on_demand=True)
+        except (OSError, xlrd.biffh.XLRDError):
+            return None
+
+        result = {}
+        try:
+            for sheet_name in workbook.sheet_names():
+                sheet = workbook.sheet_by_name(sheet_name)
+                if sheet.nrows < 2:
+                    result[sheet_name] = []
+                    continue
+                headers = [
+                    str(sheet.cell_value(0, i)) if sheet.cell_value(0, i) else f"col_{i}"
+                    for i in range(sheet.ncols)
+                ]
+                result[sheet_name] = [
+                    {
+                        headers[i]: sheet.cell_value(row_index, i)
+                        if sheet.cell_value(row_index, i) is not None else ""
+                        for i in range(sheet.ncols)
+                    }
+                    for row_index in range(1, sheet.nrows)
+                ]
+        finally:
+            workbook.release_resources()
         return result
     
     @staticmethod
@@ -495,7 +583,7 @@ class ExcelReader:
             data["checklists"] = ExcelReader.read_workbook(path)
             print(f"  ✓ Checklists: {sum(len(v) for v in data['checklists'].values())} records across {len(data['checklists'])} sheets")
         
-        return data
+        return attach_subscription_names(data)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -599,7 +687,8 @@ class AdvisorScoreModel:
         for rec in records:
             text = " ".join(str(rec.get(f, "")) for f in ("problem", "solution", "impactedType", "title"))
             subcategory = AdvisorScoreModel.classify(text, rules)
-            key = str(rec.get("impactedResource") or rec.get("name") or rec.get("Name") or id(rec))
+            name = str(rec.get("impactedResource") or rec.get("name") or rec.get("Name") or id(rec))
+            key = f"{rec.get('Subscription') or ''}{KEY_SEPARATOR}{name}"
             buckets.setdefault(subcategory, set()).add(key)
         return buckets
 
@@ -636,6 +725,87 @@ class AdvisorScoreModel:
         return (round(score) if score is not None else None), rows
 
 
+KEY_SEPARATOR = "\x1f"
+
+
+def round_half_up(value: float) -> int:
+    """Rounds .5 up; the page script mirrors this (Python's round() would round half to even)."""
+    return int(math.floor(value + 0.5))
+
+
+class ScoreModel:
+    """Pillar scores computed from per-subscription counts, so the dashboard can recompute them in
+    the browser for any subscription selection. `selected` is a set of subscription names (None =
+    all). Rows whose subscription is unknown are stored under "" and belong to every selection."""
+
+    @staticmethod
+    def _total(by_subscription: dict, selected) -> int:
+        return sum(
+            value for sub, value in by_subscription.items()
+            if selected is None or sub == "" or sub in selected
+        )
+
+    @staticmethod
+    def group_keys(keys) -> dict:
+        """Counts subscription-qualified keys ("<subscription>\x1f<name>") per subscription."""
+        counts = {}
+        for key in keys:
+            key = str(key)
+            sub = key.split(KEY_SEPARATOR, 1)[0] if KEY_SEPARATOR in key else ""
+            counts[sub] = counts.get(sub, 0) + 1
+        return counts
+
+    @staticmethod
+    def advisor_spec(weights: dict, buckets: dict, pool_by_subscription: dict, forced_zero=()) -> dict:
+        return {
+            "kind": "advisor",
+            "weights": dict(weights),
+            "forcedZero": sorted(forced_zero),
+            "pool": dict(pool_by_subscription),
+            "impacted": {subcategory: ScoreModel.group_keys(keys) for subcategory, keys in buckets.items()},
+        }
+
+    @staticmethod
+    def pillar(spec: dict, selected=None) -> dict:
+        kind = spec["kind"]
+        if kind == "advisor":
+            pool = ScoreModel._total(spec["pool"], selected)
+            if pool <= 0:
+                return {"available": False, "score": None, "rows": [], "pool": pool}
+            rows, weighted, weight_total = [], 0.0, 0
+            for subcategory, weight in spec["weights"].items():
+                if subcategory in spec["forcedZero"]:
+                    impacted = pool
+                else:
+                    impacted = min(ScoreModel._total(spec["impacted"].get(subcategory, {}), selected), pool)
+                healthy = max(0, pool - impacted)
+                pct = healthy / pool * 100
+                weighted += pct * weight
+                weight_total += weight
+                rows.append({"subcategory": subcategory, "weight": weight, "healthy": healthy,
+                             "total": pool, "pct": round_half_up(pct * 10) / 10})
+            return {"available": True, "score": round_half_up(weighted / weight_total), "rows": rows, "pool": pool}
+        if kind == "ratio":
+            pool = ScoreModel._total(spec["pool"], selected)
+            sources = [
+                {"name": source["name"], "unit": source["unit"],
+                 "count": ScoreModel._total(source["count"], selected),
+                 "affected": ScoreModel._total(source["affected"], selected)}
+                for source in spec["sources"]
+            ]
+            if pool <= 0:
+                return {"available": False, "score": None, "sources": sources, "impacted": 0, "healthy": 0, "total": pool}
+            impacted = min(ScoreModel._total(spec["impacted"], selected), pool)
+            healthy = max(0, pool - impacted)
+            return {"available": True, "score": round_half_up(healthy / pool * 100), "sources": sources,
+                    "impacted": impacted, "healthy": healthy, "total": pool}
+        scored = [pct for sub, pct in spec["scores"] if selected is None or sub == "" or sub in selected]
+        if not scored:
+            return {"available": False, "score": None, "pct": None, "scored": 0}
+        average = sum(scored) / len(scored)
+        return {"available": True, "score": round_half_up(average), "pct": round_half_up(average * 10) / 10, "scored": len(scored)}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANALYSIS ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -656,6 +826,63 @@ class InsightEngine:
         }
         self.breakdowns = {}
         self.max_score = 100
+        self._subscription_names = None
+        self.score_specs = {}
+
+    def _sub_name_of(self, row) -> str:
+        """Subscription display name of a workbook row ('' when unknown)."""
+        if self._subscription_names is None:
+            self._subscription_names = subscription_name_map(self.data)
+        return resolve_subscription_name(row, self._subscription_names) if isinstance(row, dict) else ""
+
+    def _qkey(self, row, name) -> str:
+        """Impacted-resource key qualified by subscription, so per-subscription scores can be derived."""
+        return f"{self._sub_name_of(row)}{KEY_SEPARATOR}{name}"
+
+    def _pool_by_subscription(self) -> dict:
+        """Assessed-resource pool per subscription (Governance ResourceSummary carries a subscription);
+        falls back to the Discovery total, which then belongs to every subscription selection."""
+        per_subscription = {}
+        for row in self._data_rows(self.data.get("governance", {}).get("ResourceSummary", [])):
+            sub = self._sub_name_of(row)
+            per_subscription[sub] = per_subscription.get(sub, 0) + int(row.get("Count", 0) or 0)
+        if sum(per_subscription.values()) > 0:
+            return per_subscription
+        return {"": self._resource_pool()}
+
+    def _cost_source(self, name: str, unit: str, keys, count_rows=None) -> dict:
+        affected = ScoreModel.group_keys(keys)
+        count = dict(affected)
+        if count_rows is not None:
+            count = {}
+            for row in count_rows:
+                sub = self._sub_name_of(row)
+                count[sub] = count.get(sub, 0) + 1
+        return {"name": name, "unit": unit, "count": count, "affected": affected}
+
+    def score_model_payload(self) -> dict:
+        """Everything the page script needs to recompute every pillar score for a subscription selection."""
+        subscriptions = sorted(set((self._subscription_names or subscription_name_map(self.data)).values()))
+        return {"subscriptions": subscriptions, "pillars": self.score_specs}
+
+    def _apply_advisor_spec(self, pillar: str, spec: dict) -> None:
+        result = ScoreModel.pillar(spec)
+        self.score_specs[pillar] = spec
+        self.scores[pillar] = result["score"] if result["available"] else 0
+        self.breakdowns[pillar] = {"available": result["available"], "rows": result["rows"], "pool": result["pool"]}
+
+    def _subscription_counts(self, rows) -> dict:
+        """Subscription name -> number of the rows an action item is based on. Returns {} (the item
+        stays visible under every subscription filter) when any row's subscription is unknown."""
+        if self._subscription_names is None:
+            self._subscription_names = subscription_name_map(self.data)
+        counts = {}
+        for row in rows:
+            name = resolve_subscription_name(row, self._subscription_names) if isinstance(row, dict) else ""
+            if not name:
+                return {}
+            counts[name] = counts.get(name, 0) + 1
+        return dict(sorted(counts.items()))
 
     def _resource_pool(self) -> int:
         """Total discovered resources, used as the shared 'assessed resource' pool."""
@@ -706,23 +933,32 @@ class InsightEngine:
             self.action_items.append({
                 "pillar": pillar,
                 "severity": severity,
+                "source": "Azure Advisor",
                 "title": title[:140],
                 "title_es": title[:140],
                 "title_pt": title[:140],
                 "description": desc,
                 "description_es": desc_es,
                 "description_pt": desc_pt,
+                "subscriptions": self._subscription_counts(rows),
                 "resources": resources[:10]
             })
 
     def analyze(self):
         """Run all analysis passes."""
-        self._analyze_reliability()
-        self._analyze_security()
-        self._analyze_cost()
-        self._analyze_operational_excellence()
-        self._analyze_performance()
-        self._analyze_checklists()
+        analysis_passes = (
+            (self._analyze_reliability, "Resource inventory and reliability analysis"),
+            (self._analyze_security, "Security posture assessment"),
+            (self._analyze_cost, "Cost and utilization analysis"),
+            (self._analyze_operational_excellence, "Governance and monitoring assessment"),
+            (self._analyze_performance, "Azure Monitor metrics analysis"),
+            (self._analyze_checklists, "Azure/review-checklists"),
+        )
+        for analyze_pillar, default_source in analysis_passes:
+            first_new_item = len(self.action_items)
+            analyze_pillar()
+            for item in self.action_items[first_new_item:]:
+                item.setdefault("source", default_source)
         return self
 
     def _analyze_checklists(self):
@@ -743,8 +979,10 @@ class InsightEngine:
                 "service": str(row.get("Service", "")),
                 "text": str(row.get("Text", "")),
                 "link": str(row.get("Link", "")),
-                "resources": []
+                "resources": [],
+                "rows": []
             })
+            bucket["rows"].append(row)
             resource_id = row.get("ResourceId", "")
             if resource_id:
                 bucket["resources"].append(escape(str(resource_id)))
@@ -761,12 +999,14 @@ class InsightEngine:
             self.action_items.append({
                 "pillar": bucket["pillar"],
                 "severity": bucket["severity"],
+                "source": "Azure/review-checklists",
                 "title": f'[{escape(bucket["service"])}] {title}',
                 "title_es": f'[{escape(bucket["service"])}] {title}',
                 "title_pt": f'[{escape(bucket["service"])}] {title}',
                 "description": desc,
                 "description_es": desc,
                 "description_pt": desc,
+                "subscriptions": self._subscription_counts(bucket["rows"]),
                 "resources": bucket["resources"][:10]
             })
     
@@ -780,7 +1020,8 @@ class InsightEngine:
         vms = self.data.get("discovery", {}).get("VMs", [])
         vms_no_zone = [v for v in vms if not v.get("zone") and not v.get("availabilityZone")]
         synthetic += [{"problem": "Virtual machine not deployed to an Availability Zone",
-                       "impactedResource": v.get("name", v.get("Name", ""))} for v in vms_no_zone]
+                       "impactedResource": v.get("name", v.get("Name", "")),
+                       "Subscription": self._sub_name_of(v)} for v in vms_no_zone]
         if vms_no_zone:
             self.action_items.append({
                 "pillar": "Reliability",
@@ -791,6 +1032,7 @@ class InsightEngine:
                 "description": "These VMs are not protected against datacenter failures. Consider migrating to zone-redundant deployments.",
                 "description_es": "Estas VMs no están protegidas contra fallas del centro de datos. Considere migrar a implementaciones con redundancia de zona.",
                 "description_pt": "Essas VMs não estão protegidas contra falhas de datacenter. Considere migrar para implantações com redundância de zona.",
+                "subscriptions": self._subscription_counts(vms_no_zone),
                 "resources": [{"name": v.get("name", v.get("Name", "")), "id": v.get("id")} for v in vms_no_zone[:10]]
             })
         
@@ -814,19 +1056,10 @@ class InsightEngine:
         vnets = self.data.get("discovery", {}).get("VNets", []) or self.data.get("governance", {}).get("VNets", [])
         vnets_no_ddos = [v for v in vnets if str(v.get("ddos", v.get("ddosProtection", v.get("enableDdosProtection", "")))).lower() in ("false", "", "none")]
         synthetic += [{"problem": "VNet without DDoS Protection Standard",
-                       "impactedResource": v.get("name", v.get("Name", ""))} for v in vnets_no_ddos]
+                       "impactedResource": v.get("name", v.get("Name", "")),
+                       "Subscription": self._sub_name_of(v)} for v in vnets_no_ddos]
         if vnets_no_ddos:
-            self.action_items.append({
-                "pillar": "Reliability",
-                "severity": "medium",
-                "title": f"{len(vnets_no_ddos)} VNets without DDoS Protection",
-                "title_es": f"{len(vnets_no_ddos)} VNets sin Protección DDoS",
-                "title_pt": f"{len(vnets_no_ddos)} VNets sem Proteção DDoS",
-                "description": "Enable Azure DDoS Protection Standard for internet-facing workloads.",
-                "description_es": "Habilite Azure DDoS Protection Standard para cargas de trabajo expuestas a Internet.",
-                "description_pt": "Habilite o Azure DDoS Protection Standard para cargas de trabalho expostas à Internet.",
-                "resources": [{"name": v.get("name", v.get("Name", "")), "id": v.get("id")} for v in vnets_no_ddos[:10]]
-            })
+            self._add_ddos_action_items(vnets_no_ddos)
         
         # Advisor HighAvailability recommendations
         ha_recs = self.data.get("advisor", {}).get("Reliability", [])
@@ -836,11 +1069,84 @@ class InsightEngine:
             AdvisorScoreModel.bucket(ha_recs, AdvisorScoreModel.RELIABILITY_RULES),
             AdvisorScoreModel.bucket(synthetic, AdvisorScoreModel.RELIABILITY_RULES),
         )
-        score, rows = AdvisorScoreModel.score_category(
-            AdvisorScoreModel.RELIABILITY_WEIGHTS, buckets, total_pool, forced_zero)
-        self.scores["Reliability"] = score if score is not None else 0
-        self.breakdowns["Reliability"] = {"available": score is not None, "rows": rows, "pool": total_pool}
+        self._apply_advisor_spec("Reliability", ScoreModel.advisor_spec(
+            AdvisorScoreModel.RELIABILITY_WEIGHTS, buckets, self._pool_by_subscription(), forced_zero))
     
+    def _vnet_public_exposure(self):
+        """Public IP exposure per VNet (lowercased VNet id -> row), or None when the Discovery
+        export didn't collect it (older workbook, or the exposure query was skipped)."""
+        sheet = self.data.get("discovery", {}).get("VNetPublicExposure")
+        if sheet is None:
+            return None
+        return {str(row["VNetId"]).lower(): row for row in self._data_rows(sheet) if row.get("VNetId")}
+
+    def _add_ddos_action_items(self, vnets_no_ddos: list) -> None:
+        """DDoS Protection only matters for VNets that host internet-reachable public IPs, so
+        severity follows measured exposure instead of treating every unprotected VNet alike."""
+        def vnet_ref(vnet: dict) -> dict:
+            return {"name": vnet.get("name", vnet.get("Name", "")), "id": vnet.get("id") or vnet.get("ResourceId")}
+
+        exposure = self._vnet_public_exposure()
+        if exposure is None:
+            self.action_items.append({
+                "pillar": "Reliability",
+                "severity": "medium",
+                "title": f"{len(vnets_no_ddos)} VNets without DDoS Protection",
+                "title_es": f"{len(vnets_no_ddos)} VNets sin Protección DDoS",
+                "title_pt": f"{len(vnets_no_ddos)} VNets sem Proteção DDoS",
+                "description": "Enable Azure DDoS Protection for internet-facing workloads. Public IP exposure per VNet was not collected, so severity could not be refined: re-run the Discovery phase to prioritize.",
+                "description_es": "Habilite Azure DDoS Protection para cargas de trabajo expuestas a Internet. No se recolectó la exposición de IPs públicas por VNet, por lo que no se pudo refinar la severidad: vuelva a ejecutar la fase de Discovery para priorizar.",
+                "description_pt": "Habilite o Azure DDoS Protection para cargas de trabalho expostas à Internet. A exposição de IPs públicos por VNet não foi coletada, então a severidade não pôde ser refinada: execute novamente a fase de Discovery para priorizar.",
+                "subscriptions": self._subscription_counts(vnets_no_ddos),
+                "resources": [vnet_ref(v) for v in vnets_no_ddos[:10]]
+            })
+            return
+
+        def exposure_of(vnet: dict):
+            return exposure.get(str(vnet.get("id") or vnet.get("ResourceId") or "").lower())
+
+        exposed = sorted(
+            (v for v in vnets_no_ddos if exposure_of(v)),
+            key=lambda v: -int(exposure_of(v).get("PublicIPCount") or 0),
+        )
+        unexposed = [v for v in vnets_no_ddos if not exposure_of(v)]
+
+        if exposed:
+            public_ips = sum(int(exposure_of(v).get("PublicIPCount") or 0) for v in exposed)
+            paths = sorted({
+                path.strip()
+                for v in exposed
+                for path in str(exposure_of(v).get("ExposedVia", "")).split(",")
+                if path.strip()
+            })
+            via = ", ".join(paths)
+            self.action_items.append({
+                "pillar": "Reliability",
+                "severity": "high",
+                "internet_exposed": True,
+                "title": f"{len(exposed)} VNets with internet-facing public IPs and no DDoS Protection",
+                "title_es": f"{len(exposed)} VNets con IPs públicas expuestas a Internet y sin Protección DDoS",
+                "title_pt": f"{len(exposed)} VNets com IPs públicos expostos à Internet e sem Proteção DDoS",
+                "description": f"{public_ips} public IP(s) are reachable through these VNets (via {via}). Enable Azure DDoS Network Protection or DDoS IP Protection for them.",
+                "description_es": f"{public_ips} IP(s) pública(s) son accesibles a través de estas VNets (mediante {via}). Habilite Azure DDoS Network Protection o DDoS IP Protection para ellas.",
+                "description_pt": f"{public_ips} IP(s) público(s) são acessíveis por meio dessas VNets (via {via}). Habilite o Azure DDoS Network Protection ou o DDoS IP Protection para eles.",
+                "subscriptions": self._subscription_counts(exposed),
+                "resources": [vnet_ref(v) for v in exposed[:10]]
+            })
+        if unexposed:
+            self.action_items.append({
+                "pillar": "Reliability",
+                "severity": "low",
+                "title": f"{len(unexposed)} VNets without DDoS Protection (no public IPs detected)",
+                "title_es": f"{len(unexposed)} VNets sin Protección DDoS (sin IPs públicas detectadas)",
+                "title_pt": f"{len(unexposed)} VNets sem Proteção DDoS (sem IPs públicos detectados)",
+                "description": "No public IPs were found behind these VNets (checked network interfaces, Application Gateway, Firewall, Bastion, gateways, and public load balancers), so a DDoS plan is not a priority. Revisit if public endpoints are added.",
+                "description_es": "No se encontraron IPs públicas detrás de estas VNets (se revisaron interfaces de red, Application Gateway, Firewall, Bastion, gateways y balanceadores públicos), por lo que un plan DDoS no es prioritario. Reevalúe si se agregan endpoints públicos.",
+                "description_pt": "Nenhum IP público foi encontrado por trás dessas VNets (foram verificados interfaces de rede, Application Gateway, Firewall, Bastion, gateways e balanceadores públicos), então um plano DDoS não é prioritário. Reavalie se endpoints públicos forem adicionados.",
+                "subscriptions": self._subscription_counts(unexposed),
+                "resources": [vnet_ref(v) for v in unexposed[:10]]
+            })
+
     def _analyze_security(self):
         """Security score = Microsoft Defender Secure Score average (same model Advisor uses)."""
         security = self.data.get("security", {})
@@ -848,18 +1154,23 @@ class InsightEngine:
         if not secure_scores:
             secure_scores = self._data_rows(self.data.get("governance", {}).get("SecureScores", []))
         avg_score = None
+        secure_pairs = []
         if secure_scores:
             values = [
                 float(s.get("percentageScore", s.get("pct", s.get("percentage", 0))) or 0)
                 for s in secure_scores
             ]
             avg_score = sum(values) / len(values)
-            if avg_score <= 1:  # export may store a 0-1 ratio instead of 0-100
-                avg_score *= 100
+            scale = 100.0 if avg_score <= 1 else 1.0  # export may store a 0-1 ratio instead of 0-100
+            avg_score *= scale
+            secure_pairs = [[self._sub_name_of(s), value * scale] for s, value in zip(secure_scores, values)]
             self.insights.append({
                 "pillar": "Security",
                 "text": f"Average Defender Secure Score: {avg_score:.0f}%"
             })
+        security_spec = {"kind": "secure", "scores": secure_pairs}
+        self.score_specs["Security"] = security_spec
+        secure_result = ScoreModel.pillar(security_spec)
         
         # Storage accounts with public access
         storage = self.data.get("discovery", {}).get("Storage", [])
@@ -874,6 +1185,7 @@ class InsightEngine:
                 "description": "Disable public blob access unless explicitly required. This is a common data exposure risk.",
                 "description_es": "Deshabilite el acceso público a blobs a menos que sea explícitamente necesario. Este es un riesgo común de exposición de datos.",
                 "description_pt": "Desabilite o acesso público a blobs, a menos que seja explicitamente necessário. Este é um risco comum de exposição de dados.",
+                "subscriptions": self._subscription_counts(public_storage),
                 "resources": [{"name": s.get("name", s.get("Name", "")), "id": s.get("id")} for s in public_storage[:10]]
             })
         
@@ -890,6 +1202,7 @@ class InsightEngine:
                 "description": "Enable purge protection to prevent permanent deletion of secrets, keys, and certificates.",
                 "description_es": "Habilite la protección contra purga para evitar la eliminación permanente de secretos, claves y certificados.",
                 "description_pt": "Habilite a proteção contra exclusão definitiva para evitar a exclusão permanente de segredos, chaves e certificados.",
+                "subscriptions": self._subscription_counts(kv_no_purge),
                 "resources": [{"name": k.get("name", k.get("Name", "")), "id": k.get("id")} for k in kv_no_purge[:10]]
             })
         
@@ -905,6 +1218,7 @@ class InsightEngine:
                 "description": "Enforce minimum TLS 1.2 for all storage accounts to prevent protocol downgrade attacks.",
                 "description_es": "Exija TLS 1.2 como mínimo en todas las cuentas de almacenamiento para evitar ataques de downgrade de protocolo.",
                 "description_pt": "Exija TLS 1.2 no mínimo em todas as contas de armazenamento para evitar ataques de downgrade de protocolo.",
+                "subscriptions": self._subscription_counts(old_tls),
                 "resources": [{"name": s.get("name", s.get("Name", "")), "id": s.get("id")} for s in old_tls[:10]]
             })
         
@@ -931,6 +1245,7 @@ class InsightEngine:
                 "description": "Review broad-scope privileged role assignments for least-privilege access. Prefer scoping to resource groups.",
                 "description_es": "Revise las asignaciones de roles privilegiados de alcance amplio para aplicar el principio de mínimo privilegio. Prefiera limitar el alcance a grupos de recursos.",
                 "description_pt": "Revise as atribuições de funções privilegiadas de amplo escopo para aplicar o princípio de menor privilégio. Prefira limitar o escopo a grupos de recursos.",
+                "subscriptions": self._subscription_counts(broad_privileged),
                 "resources": [f"{r.get('principalType', '')} ({r.get('scope_', '')})" for r in broad_privileged[:10]]
             })
         
@@ -952,6 +1267,7 @@ class InsightEngine:
                 "description": "Enable Microsoft Defender for Cloud plans for full threat protection coverage.",
                 "description_es": "Habilite los planes de Microsoft Defender for Cloud para una cobertura completa de protección contra amenazas.",
                 "description_pt": "Habilite os planos do Microsoft Defender for Cloud para cobertura completa de proteção contra ameaças.",
+                "subscriptions": self._subscription_counts(disabled_plans),
                 "resources": sorted({p.get("planName", p.get("name", "")) for p in disabled_plans})[:10]
             })
 
@@ -974,6 +1290,7 @@ class InsightEngine:
                 "description": "Prioritize unhealthy CSPM recommendations that carry critical or high severity.",
                 "description_es": "Priorice las recomendaciones de CSPM no saludables con severidad crítica o alta.",
                 "description_pt": "Priorize as recomendações de CSPM não saudáveis com severidade crítica ou alta.",
+                "subscriptions": self._subscription_counts(severe_recommendations),
                 "resources": [
                     {"name": recommendation.get("recommendationName", recommendation.get("affectedResourceId", "")), "id": recommendation.get("affectedResourceId")}
                     for recommendation in severe_recommendations[:10]
@@ -1023,11 +1340,11 @@ class InsightEngine:
         ]
         source_status = self._data_rows(security.get("SourceStatus", []))
         
-        self.scores["Security"] = round(avg_score) if avg_score is not None else 0
+        self.scores["Security"] = secure_result["score"] if secure_result["available"] else 0
         self.breakdowns["Security"] = {
-            "available": avg_score is not None,
-            "secure_score_pct": round(avg_score, 1) if avg_score is not None else None,
-            "subscriptions_scored": len(secure_scores),
+            "available": secure_result["available"],
+            "secure_score_pct": secure_result["pct"],
+            "subscriptions_scored": secure_result["scored"],
             "findings": [
                 ("Public Blob Access on Storage Accounts", "Acceso p\u00fablico a blobs en cuentas de almacenamiento", "Acesso p\u00fablico a blobs em contas de armazenamento", len(public_storage)),
                 ("Key Vaults without Purge Protection", "Key Vaults sin Protecci\u00f3n contra Purga", "Key Vaults sem Prote\u00e7\u00e3o contra Purga", len(kv_no_purge)),
@@ -1068,14 +1385,9 @@ class InsightEngine:
             orphaned = disks
         
         if orphaned:
-            keys = {str(o.get("Name", o.get("name", id(o)))) for o in orphaned}
+            keys = {self._qkey(o, o.get("Name", o.get("name", id(o)))) for o in orphaned}
             impacted_keys |= keys
-            sources.append({
-                "name": "Orphaned/unused resources",
-                "count": len(keys),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Orphaned/unused resources", "resources", keys))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "medium",
@@ -1085,20 +1397,16 @@ class InsightEngine:
                 "description": "These resources incur costs but are not attached to any workload. Review and delete if unused.",
                 "description_es": "Estos recursos generan costos pero no están asociados a ninguna carga de trabajo. Revíselos y elimínelos si no se utilizan.",
                 "description_pt": "Esses recursos geram custos, mas não estão associados a nenhuma carga de trabalho. Revise e exclua se não forem utilizados.",
+                "subscriptions": self._subscription_counts(orphaned),
                 "resources": [{"name": o.get("Name", o.get("name", "")), "id": o.get("id") or o.get("ResourceId")} for o in orphaned[:10]]
             })
         
         # VMs that are deallocated (still paying for disks)
         dealloc_vms = self._data_rows(self.data.get("discovery", {}).get("DeallocatedVMs", []))
         if dealloc_vms:
-            keys = {str(v.get("name", v.get("Name", id(v)))) for v in dealloc_vms}
+            keys = {self._qkey(v, v.get("name", v.get("Name", id(v)))) for v in dealloc_vms}
             impacted_keys |= keys
-            sources.append({
-                "name": "Deallocated VMs",
-                "count": len(keys),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Deallocated VMs", "resources", keys))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "low",
@@ -1108,6 +1416,7 @@ class InsightEngine:
                 "description": "Deallocated VMs still incur costs for attached disks and static IPs. Consider deleting if no longer needed.",
                 "description_es": "Las VMs desasignadas siguen generando costos por los discos e IPs estáticas asociadas. Considere eliminarlas si ya no son necesarias.",
                 "description_pt": "VMs desalocadas continuam gerando custos pelos discos e IPs estáticos associados. Considere excluí-las se não forem mais necessárias.",
+                "subscriptions": self._subscription_counts(dealloc_vms),
                 "resources": [{"name": v.get("name", v.get("Name", "")), "id": v.get("id")} for v in dealloc_vms[:10]]
             })
         
@@ -1115,14 +1424,9 @@ class InsightEngine:
         vm_metrics = self._data_rows(self.data.get("metrics", {}).get("VM_RightSizing", []))
         underutilized = [v for v in vm_metrics if "Idle" in str(v.get("Assessment", "")) or "Underutilized" in str(v.get("Assessment", ""))]
         if underutilized:
-            keys = {str(v.get("Name", id(v))) for v in underutilized}
+            keys = {self._qkey(v, v.get("Name", id(v))) for v in underutilized}
             impacted_keys |= keys
-            sources.append({
-                "name": "Idle/underutilized VMs",
-                "count": len(keys),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Idle/underutilized VMs", "resources", keys))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "high",
@@ -1132,6 +1436,7 @@ class InsightEngine:
                 "description": "These VMs have <15% average CPU over 30 days. Consider downsizing or deallocating.",
                 "description_es": "Estas VMs tienen <15% de uso promedio de CPU en 30 días. Considere reducir su tamaño o desasignarlas.",
                 "description_pt": "Essas VMs têm menos de 15% de uso médio de CPU em 30 dias. Considere redimensionar ou desalocar.",
+                "subscriptions": self._subscription_counts(underutilized),
                 "resources": [{"name": f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)", "id": v.get("ResourceId")} for v in underutilized[:10]]
             })
         
@@ -1139,14 +1444,9 @@ class InsightEngine:
         sql_metrics = self._data_rows(self.data.get("metrics", {}).get("SQL_RightSizing", []))
         sql_waste = [d for d in sql_metrics if str(d.get("Assessment", "")).startswith(("Oversized", "Underutilized"))]
         if sql_waste:
-            keys = {str(d.get("Name", id(d))) for d in sql_waste}
+            keys = {self._qkey(d, d.get("Name", id(d))) for d in sql_waste}
             impacted_keys |= keys
-            sources.append({
-                "name": "Oversized/underutilized SQL databases",
-                "count": len(keys),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Oversized/underutilized SQL databases", "resources", keys))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "medium",
@@ -1156,6 +1456,7 @@ class InsightEngine:
                 "description": "These databases run well below their provisioned DTU/CPU tier over 30 days. Consider a lower SKU.",
                 "description_es": "Estas bases de datos operan muy por debajo de su nivel de DTU/CPU aprovisionado durante 30 días. Considere un SKU menor.",
                 "description_pt": "Esses bancos de dados operam bem abaixo do nível de DTU/CPU provisionado durante 30 dias. Considere um SKU menor.",
+                "subscriptions": self._subscription_counts(sql_waste),
                 "resources": [{"name": f"{d.get('Name', '')} ({d.get('SKU', '')} @ {d.get('AvgUsage_Pct', '?')}% {d.get('MetricType', '')})", "id": d.get("ResourceId")} for d in sql_waste[:10]]
             })
 
@@ -1163,14 +1464,9 @@ class InsightEngine:
         plan_metrics = self._data_rows(self.data.get("metrics", {}).get("AppPlan_RightSizing", []))
         plan_waste = [p for p in plan_metrics if str(p.get("Assessment", "")).startswith(("Idle", "Underutilized"))]
         if plan_waste:
-            keys = {str(p.get("Name", id(p))) for p in plan_waste}
+            keys = {self._qkey(p, p.get("Name", id(p))) for p in plan_waste}
             impacted_keys |= keys
-            sources.append({
-                "name": "Idle/underutilized App Service Plans",
-                "count": len(keys),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Idle/underutilized App Service Plans", "resources", keys))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "medium",
@@ -1180,6 +1476,7 @@ class InsightEngine:
                 "description": "These plans run well below their provisioned CPU/memory over 30 days. Consider scaling down or consolidating apps.",
                 "description_es": "Estos planes operan muy por debajo de su CPU/memoria aprovisionada durante 30 días. Considere reducir su tamaño o consolidar aplicaciones.",
                 "description_pt": "Esses planos operam bem abaixo da CPU/memória provisionada durante 30 dias. Considere reduzir o tamanho ou consolidar aplicativos.",
+                "subscriptions": self._subscription_counts(plan_waste),
                 "resources": [{"name": f"{p.get('Name', '')} ({p.get('SKU', '')} @ {p.get('AvgCPU_Pct', '?')}% CPU)", "id": p.get("ResourceId")} for p in plan_waste[:10]]
             })
 
@@ -1187,14 +1484,9 @@ class InsightEngine:
         storage_metrics = self._data_rows(self.data.get("metrics", {}).get("Storage_Activity", []))
         storage_waste = [s for s in storage_metrics if str(s.get("Assessment", "")).startswith(("Zero", "Minimal"))]
         if storage_waste:
-            keys = {str(s.get("Name", id(s))) for s in storage_waste}
+            keys = {self._qkey(s, s.get("Name", id(s))) for s in storage_waste}
             impacted_keys |= keys
-            sources.append({
-                "name": "Storage accounts with zero/minimal activity",
-                "count": len(keys),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Storage accounts with zero/minimal activity", "resources", keys))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "low",
@@ -1204,20 +1496,16 @@ class InsightEngine:
                 "description": "These storage accounts had near-zero transactions over 30 days. Review for deletion or tier downgrade (e.g. to Archive).",
                 "description_es": "Estas cuentas de almacenamiento tuvieron transacciones casi nulas durante 30 días. Considere eliminarlas o cambiarlas a un nivel más económico (p. ej. Archive).",
                 "description_pt": "Essas contas de armazenamento tiveram transações quase nulas durante 30 dias. Considere excluí-las ou migrá-las para um nível mais econômico (ex.: Archive).",
+                "subscriptions": self._subscription_counts(storage_waste),
                 "resources": [{"name": f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgDailyTxns', '?')} txns/day)", "id": s.get("ResourceId")} for s in storage_waste[:10]]
             })
 
         # Cost recommendations from Advisor
         cost_recs = self._data_rows(self.data.get("advisor", {}).get("Cost", []))
         if cost_recs:
-            keys = {str(r.get("impactedResource", r.get("impactedValue", id(r)))) for r in cost_recs}
+            keys = {self._qkey(r, r.get("impactedResource", r.get("impactedValue", id(r)))) for r in cost_recs}
             impacted_keys |= keys
-            sources.append({
-                "name": "Advisor Cost recommendations",
-                "count": len(cost_recs),
-                "unit": "recommendations",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source("Advisor Cost recommendations", "recommendations", keys, cost_recs))
             self._expand_advisor_items(cost_recs, "Cost Optimization", savings_field="annualSavings")
 
         # Reservation / Savings Plan recommendations (rate optimization). Informational only -
@@ -1242,6 +1530,7 @@ class InsightEngine:
                 "description": desc,
                 "description_es": desc_es,
                 "description_pt": desc_pt,
+                "subscriptions": self._subscription_counts(reservation_recs),
                 "resources": [f"{r.get('ResourceType', '')} {r.get('SkuName', '')} x{r.get('RecommendedQty', '?')} ({r.get('Term', '')})" for r in reservation_recs[:10]]
             })
 
@@ -1263,14 +1552,9 @@ class InsightEngine:
             rows = self._data_rows(finops.get(sheet_name, []))
             if not rows:
                 continue
-            keys = {str(r.get("name", id(r))) for r in rows}
+            keys = {self._qkey(r, r.get("name", id(r))) for r in rows}
             impacted_keys |= keys
-            sources.append({
-                "name": title_en,
-                "count": len(rows),
-                "unit": "resources",
-                "affected": len(keys),
-            })
+            sources.append(self._cost_source(title_en, "resources", keys, rows))
             self.action_items.append({
                 "pillar": "Cost Optimization",
                 "severity": "low",
@@ -1280,23 +1564,21 @@ class InsightEngine:
                 "description": "Extra FinOps optimization check (mirrors Azure FinOps Hub's daily Resource Graph queries). Review and remediate if unused.",
                 "description_es": "Verificación adicional de optimización FinOps (equivalente a las consultas diarias de Resource Graph de Azure FinOps Hub). Revise y corrija si no se utiliza.",
                 "description_pt": "Verificação adicional de otimização FinOps (equivalente às consultas diárias do Resource Graph do Azure FinOps Hub). Revise e corrija se não for utilizado.",
+                "subscriptions": self._subscription_counts(rows),
                 "resources": [str(r.get("name", "")) for r in rows[:10]]
             })
 
-        if total_pool > 0:
-            impacted = min(len(impacted_keys), total_pool)
-            healthy = max(0, total_pool - impacted)
-            score = round((healthy / total_pool) * 100)
-        else:
-            healthy, score = 0, None
-        
-        self.scores["Cost Optimization"] = score if score is not None else 0
+        spec = {"kind": "ratio", "pool": self._pool_by_subscription(),
+                "impacted": ScoreModel.group_keys(impacted_keys), "sources": sources}
+        result = ScoreModel.pillar(spec)
+        self.score_specs["Cost Optimization"] = spec
+        self.scores["Cost Optimization"] = result["score"] if result["available"] else 0
         self.breakdowns["Cost Optimization"] = {
-            "available": score is not None,
-            "sources": sources,
-            "impacted": min(len(impacted_keys), total_pool),
-            "healthy": healthy,
-            "total": total_pool,
+            "available": result["available"],
+            "sources": result["sources"],
+            "impacted": result["impacted"],
+            "healthy": result["healthy"],
+            "total": result["total"],
         }
     
     def _analyze_operational_excellence(self):
@@ -1311,7 +1593,8 @@ class InsightEngine:
             if no_diag:
                 pct_missing = len(no_diag) / len(diag) * 100
                 synthetic += [{"problem": "Resource missing diagnostic settings",
-                               "impactedResource": d.get("Name", d.get("name", ""))} for d in no_diag]
+                               "impactedResource": d.get("Name", d.get("name", "")),
+                               "Subscription": self._sub_name_of(d)} for d in no_diag]
                 self.action_items.append({
                     "pillar": "Operational Excellence",
                     "severity": "high",
@@ -1321,6 +1604,7 @@ class InsightEngine:
                     "description": "Configure diagnostic settings to send logs to Log Analytics for observability and troubleshooting.",
                     "description_es": "Configure ajustes de diagnóstico para enviar registros a Log Analytics para observabilidad y solución de problemas.",
                     "description_pt": "Configure as configurações de diagnóstico para enviar logs ao Log Analytics para observabilidade e solução de problemas.",
+                    "subscriptions": self._subscription_counts(no_diag),
                     "resources": [{"name": d.get("Name", d.get("name", "")), "id": d.get("ResourceId")} for d in no_diag[:10]]
                 })
         
@@ -1335,10 +1619,10 @@ class InsightEngine:
                 total_taggable += 1
                 tags = r.get("tags")
                 if not tags or str(tags).strip().lower() in ("", "none", "{}"):
-                    untagged.append({"name": r.get("name", r.get("Name", "")), "id": r.get("id")})
+                    untagged.append({"name": r.get("name", r.get("Name", "")), "id": r.get("id"), "Subscription": self._sub_name_of(r)})
         if total_taggable > 0 and untagged:
             pct_untagged = len(untagged) / total_taggable * 100
-            synthetic += [{"problem": "Resource has no tags configured", "impactedResource": n["name"]} for n in untagged]
+            synthetic += [{"problem": "Resource has no tags configured", "impactedResource": n["name"], "Subscription": n["Subscription"]} for n in untagged]
             self.action_items.append({
                 "pillar": "Operational Excellence",
                 "severity": "medium",
@@ -1348,6 +1632,7 @@ class InsightEngine:
                 "description": "Implement a tagging strategy (Owner, CostCenter, Environment, Application) for governance and cost allocation.",
                 "description_es": "Implemente una estrategia de etiquetado (Owner, CostCenter, Environment, Application) para gobernanza y asignación de costos.",
                 "description_pt": "Implemente uma estratégia de tags (Owner, CostCenter, Environment, Application) para governança e alocação de custos.",
+                "subscriptions": self._subscription_counts(untagged),
                 "resources": untagged[:10]
             })
         
@@ -1373,7 +1658,8 @@ class InsightEngine:
             total_nc = sum(int(c.get("NonCompliantCount", 0) or 0) for c in compliance)
             non_compliant = [c for c in compliance if int(c.get("NonCompliantCount", 0) or 0) > 0]
             synthetic += [{"problem": "Non-compliant policy evaluation",
-                           "impactedResource": c.get("policyAssignment", c.get("policyAssignmentName", ""))} for c in non_compliant]
+                           "impactedResource": c.get("policyAssignment", c.get("policyAssignmentName", "")),
+                           "Subscription": self._sub_name_of(c)} for c in non_compliant]
             if total_nc > 0:
                 self.action_items.append({
                     "pillar": "Operational Excellence",
@@ -1384,6 +1670,7 @@ class InsightEngine:
                     "description": "Review policy compliance and remediate non-compliant resources or adjust policy assignments.",
                     "description_es": "Revise el cumplimiento de políticas y corrija los recursos no conformes o ajuste las asignaciones de políticas.",
                     "description_pt": "Revise a conformidade de políticas e corrija os recursos não conformes ou ajuste as atribuições de política.",
+                    "subscriptions": self._subscription_counts(compliance),
                     "resources": [f"{c.get('policyAssignment', c.get('policyAssignmentName', ''))} ({c.get('NonCompliantCount', 0)} violations)" for c in compliance[:10]]
                 })
         
@@ -1395,9 +1682,8 @@ class InsightEngine:
             AdvisorScoreModel.bucket(opex_recs, AdvisorScoreModel.OPERATIONAL_RULES),
             AdvisorScoreModel.bucket(synthetic, AdvisorScoreModel.OPERATIONAL_RULES),
         )
-        score, rows = AdvisorScoreModel.score_category(AdvisorScoreModel.OPERATIONAL_WEIGHTS, buckets, total_pool)
-        self.scores["Operational Excellence"] = score if score is not None else 0
-        self.breakdowns["Operational Excellence"] = {"available": score is not None, "rows": rows, "pool": total_pool}
+        self._apply_advisor_spec("Operational Excellence", ScoreModel.advisor_spec(
+            AdvisorScoreModel.OPERATIONAL_WEIGHTS, buckets, self._pool_by_subscription()))
     
     def _analyze_performance(self):
         """Performance score using the official Advisor Score subcategory model."""
@@ -1408,7 +1694,8 @@ class InsightEngine:
         vm_metrics = self.data.get("metrics", {}).get("VM_RightSizing", [])
         saturated = [v for v in vm_metrics if "Saturated" in str(v.get("Assessment", ""))]
         synthetic += [{"problem": "Virtual machine CPU saturated",
-                       "impactedResource": v.get("Name", "")} for v in saturated]
+                       "impactedResource": v.get("Name", ""),
+                       "Subscription": self._sub_name_of(v)} for v in saturated]
         if saturated:
             self.action_items.append({
                 "pillar": "Performance Efficiency",
@@ -1419,6 +1706,7 @@ class InsightEngine:
                 "description": "These VMs are consistently at high CPU usage. Consider scaling up or scaling out.",
                 "description_es": "Estas VMs presentan un uso de CPU consistentemente alto. Considere escalar verticalmente u horizontalmente.",
                 "description_pt": "Essas VMs apresentam uso de CPU consistentemente alto. Considere escalar verticalmente ou horizontalmente.",
+                "subscriptions": self._subscription_counts(saturated),
                 "resources": [{"name": f"{v.get('Name', '')} ({v.get('VMSize', '')} @ {v.get('AvgCPU_Pct', '?')}% CPU)", "id": v.get("ResourceId")} for v in saturated[:10]]
             })
         
@@ -1426,7 +1714,8 @@ class InsightEngine:
         sql_metrics = self.data.get("metrics", {}).get("SQL_RightSizing", [])
         saturated_sql = [s for s in sql_metrics if "Saturated" in str(s.get("Assessment", ""))]
         synthetic += [{"problem": "SQL database DTU/CPU saturated",
-                       "impactedResource": s.get("Name", "")} for s in saturated_sql]
+                       "impactedResource": s.get("Name", ""),
+                       "Subscription": self._sub_name_of(s)} for s in saturated_sql]
         if saturated_sql:
             self.action_items.append({
                 "pillar": "Performance Efficiency",
@@ -1437,6 +1726,7 @@ class InsightEngine:
                 "description": "These databases are consistently at high utilization. Consider scaling up the tier.",
                 "description_es": "Estas bases de datos presentan una utilización consistentemente alta. Considere aumentar el nivel de servicio.",
                 "description_pt": "Esses bancos de dados apresentam utilização consistentemente alta. Considere aumentar o nível de serviço.",
+                "subscriptions": self._subscription_counts(saturated_sql),
                 "resources": [{"name": f"{s.get('Name', '')} ({s.get('SKU', '')} @ {s.get('AvgUsage_Pct', '?')}%)", "id": s.get("ResourceId")} for s in saturated_sql[:10]]
             })
         
@@ -1448,16 +1738,15 @@ class InsightEngine:
             AdvisorScoreModel.bucket(perf_recs, AdvisorScoreModel.PERFORMANCE_RULES),
             AdvisorScoreModel.bucket(synthetic, AdvisorScoreModel.PERFORMANCE_RULES),
         )
-        score, rows = AdvisorScoreModel.score_category(AdvisorScoreModel.PERFORMANCE_WEIGHTS, buckets, total_pool)
-        self.scores["Performance Efficiency"] = score if score is not None else 0
-        self.breakdowns["Performance Efficiency"] = {"available": score is not None, "rows": rows, "pool": total_pool}
+        self._apply_advisor_spec("Performance Efficiency", ScoreModel.advisor_spec(
+            AdvisorScoreModel.PERFORMANCE_WEIGHTS, buckets, self._pool_by_subscription()))
     
     def get_overall_score(self) -> int:
         """Mean of the available category scores (per the official Advisor Score model)."""
         available = [p for p, b in self.breakdowns.items() if b.get("available")]
         if not available:
             return 0
-        return round(sum(self.scores[p] for p in available) / len(available))
+        return round_half_up(sum(self.scores[p] for p in available) / len(available))
 
 
 class ScoreHistoryTracker:
@@ -1470,7 +1759,7 @@ class ScoreHistoryTracker:
     MAX_RUNS = 30
 
     def __init__(self, base_dir: str):
-        self.path = f"{base_dir.rstrip('/\\')}.history.json"
+        self.path = base_dir.rstrip("/\\") + ".history.json"
         self.runs = self._load()
 
     def _load(self) -> list:
@@ -1566,26 +1855,21 @@ class DashboardGenerator:
         svg = re.sub(r"<svg ", f'<svg class="{css_class}" ', svg, count=1)
         return svg
 
-    # Original mark for this toolkit (favicon only): a classic compass, needle twisted to a
-    # bearing rather than due north - the toolkit "guides" the workload assessment across the
-    # WAF pillars. Muted/desaturated palette (no vivid red/blue).
-    def _assessment_logo_svg(self, css_class: str = "az-icon header-logo") -> str:
-        """Render this toolkit's own logo (not the official Azure logo): a compass badge, used
-        for the browser favicon."""
-        body = '<circle cx="20" cy="20" r="18" fill="#4A6FA1" />'
-        ring = '<circle cx="20" cy="20" r="14" fill="none" stroke="#E7ECF2" stroke-width="1.4" opacity="0.5" />'
-        ticks = "".join(
-            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#E7ECF2" stroke-width="1.4" opacity="0.5" />'
-            for x1, y1, x2, y2 in [(20, 4, 20, 7), (20, 33, 20, 36), (4, 20, 7, 20), (33, 20, 36, 20)]
-        )
-        needle_north = '<path d="M 20 8 L 24 20 L 16 20 Z" fill="#B5675A" />'
-        needle_south = '<path d="M 20 32 L 24 20 L 16 20 Z" fill="#EDEDED" />'
-        needle = f'<g transform="rotate(35 20 20)">{needle_north}{needle_south}</g>'
-        pivot = '<circle cx="20" cy="20" r="2.4" fill="#33333a" />'
-        return (
-            f'<svg class="{css_class}" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">'
-            f'{body}{ring}{ticks}{needle}{pivot}</svg>'
-        )
+    # Original mark for this toolkit (favicon only): a dark-on-transparent and a
+    # white-on-transparent variant, swapped automatically via prefers-color-scheme so the
+    # icon stays legible whether the browser/OS is in light or dark mode.
+    _LOGO_PNG_CACHE: dict = {}
+
+    def _favicon_png_base64(self, variant: str) -> str:
+        """Read one of the toolkit's own favicon PNGs ('dark' or 'white') and return it
+        base64-encoded, used for the browser favicon."""
+        cached = DashboardGenerator._LOGO_PNG_CACHE.get(variant)
+        if cached is None:
+            filename = "dark logo.png" if variant == "dark" else "white logo.png"
+            png_path = Path(__file__).parent / "assets" / "branding" / filename
+            cached = base64.b64encode(png_path.read_bytes()).decode("ascii")
+            DashboardGenerator._LOGO_PNG_CACHE[variant] = cached
+        return cached
 
     _VENDOR_JS_CACHE: dict = {}
 
@@ -1815,7 +2099,7 @@ class DashboardGenerator:
         guest_users = real_rows("GuestUsers")
 
         secure_score = breakdown.get("secure_score_pct")
-        secure_score_text = f"{secure_score:.1f}%" if secure_score is not None else "N/A"
+        secure_score_text = f'<span data-secure-pct>{secure_score:.1f}%</span>' if secure_score is not None else '<span data-secure-pct>N/A</span>'
         stats = [
             (secure_score_text, bi("Defender Secure Score", "Secure Score de Defender", "Secure Score do Defender"), "security-accent"),
             (breakdown.get("open_recommendations", 0), bi("Open CSPM Recommendations", "Recomendaciones CSPM abiertas", "Recomendações CSPM abertas"), "security-danger"),
@@ -1872,7 +2156,7 @@ class DashboardGenerator:
             ("planName", "Defender Plan", "Plan de Defender", False),
             ("pricingTier", "Tier", "Nivel", False),
             ("subPlan", "Sub-plan", "Subplan", False),
-            ("subscriptionId", "Subscription", "Suscripción", False),
+            ("Subscription", "Subscription", "Suscripción", False),
         ], "No Defender plan data returned.", "No se devolvieron datos de planes de Defender.")
         incidents_table = render_table(incidents, [
             ("Severity", "Severity", "Severidad", False),
@@ -2025,106 +2309,134 @@ class DashboardGenerator:
             {self._render_actions_for_pillar("Security")}
         </div>"""
 
-    def _recommend_azure_resources(self) -> list:
-        """Recommend Azure capabilities only when generated action items provide evidence for them."""
-        rules = [
-            {
-                "name": "Azure Policy",
-                "name_es": "Azure Policy",
-                "name_pt": "Azure Policy",
-                "description": "Standardize configuration and remediate policy, compliance, tagging, public-access, and resource-protection gaps at scale.",
-                "description_es": "Estandarice la configuración y corrija a escala las brechas de políticas, cumplimiento, etiquetado, acceso público y protección de recursos.",
-                "description_pt": "Padronize a configuração e corrija em escala as lacunas de política, conformidade, tags, acesso público e proteção de recursos.",
-                "keywords": ("policy assignment", "policy evaluation", "policy compliance", "non-compliant", "compliance", "tagging", "no tags", "resource lock", "public access"),
-                "url": "https://learn.microsoft.com/azure/governance/policy/overview",
-            },
-            {
-                "name": "Log Analytics workspace + Azure Monitor",
-                "name_es": "Área de trabajo de Log Analytics + Azure Monitor",
-                "name_pt": "Workspace do Log Analytics + Azure Monitor",
-                "description": "Centralize diagnostic logs, metrics, alerts, and operational queries for resources that lack observability or show capacity pressure.",
-                "description_es": "Centralice registros de diagnóstico, métricas, alertas y consultas operativas para recursos sin observabilidad o con presión de capacidad.",
-                "description_pt": "Centralize logs de diagnóstico, métricas, alertas e consultas operacionais para recursos sem observabilidade ou com pressão de capacidade.",
-                "keywords": ("diagnostic", "log analytics", "observability", "monitoring", "metric", "cpu", "saturat", "performance"),
-                "url": "https://learn.microsoft.com/azure/azure-monitor/fundamentals/overview",
-            },
-            {
-                "name": "Recovery Services vault + Azure Backup",
-                "name_es": "Almacén de Recovery Services + Azure Backup",
-                "name_pt": "Cofre do Recovery Services + Azure Backup",
-                "description": "Provide centralized backup policy, protected recovery points, and restore operations for workloads with missing or weak data protection.",
-                "description_es": "Proporcione políticas de copia de seguridad centralizadas, puntos de recuperación protegidos y operaciones de restauración para cargas con protección de datos insuficiente.",
-                "description_pt": "Forneça política de backup centralizada, pontos de recuperação protegidos e operações de restauração para cargas de trabalho com proteção de dados ausente ou fraca.",
-                "keywords": ("backup", "recovery services", "recovery vault", "restore", "recovery point"),
-                "url": "https://learn.microsoft.com/azure/backup/backup-overview",
-            },
-            {
-                "name": "Azure DDoS Network Protection plan",
-                "name_es": "Plan de Azure DDoS Network Protection",
-                "name_pt": "Plano do Azure DDoS Network Protection",
-                "description": "Protect internet-facing virtual networks with adaptive DDoS mitigation, telemetry, and attack support.",
-                "description_es": "Proteja redes virtuales expuestas a Internet con mitigación DDoS adaptativa, telemetría y soporte ante ataques.",
-                "description_pt": "Proteja redes virtuais expostas à Internet com mitigação adaptativa de DDoS, telemetria e suporte a ataques.",
-                "keywords": ("ddos",),
-                "url": "https://learn.microsoft.com/azure/ddos-protection/ddos-protection-overview",
-            },
-            {
-                "name": "Microsoft Defender for Cloud",
-                "name_es": "Microsoft Defender for Cloud",
-                "name_pt": "Microsoft Defender for Cloud",
-                "description": "Improve cloud security posture, prioritize high-risk recommendations, and add workload protection where coverage is missing.",
-                "description_es": "Mejore la postura de seguridad, priorice recomendaciones de alto riesgo y agregue protección de cargas donde falte cobertura.",
-                "description_pt": "Melhore a postura de segurança, priorize recomendações de alto risco e adicione proteção de cargas de trabalho onde a cobertura estiver faltando.",
-                "keywords": ("defender", "secure score", "cspm", "mcsb", "security posture", "vulnerab", "security recommendation", "tls"),
-                "url": "https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction",
-            },
-            {
-                "name": "Microsoft Sentinel",
-                "name_es": "Microsoft Sentinel",
-                "name_pt": "Microsoft Sentinel",
-                "description": "Centralize security incidents and alerts for investigation, automation, and coordinated response.",
-                "description_es": "Centralice incidentes y alertas de seguridad para investigación, automatización y respuesta coordinada.",
-                "description_pt": "Centralize incidentes e alertas de segurança para investigação, automação e resposta coordenada.",
-                "keywords": ("security incident", "xdr incident", "security alert", "xdr alert"),
-                "url": "https://learn.microsoft.com/azure/sentinel/overview",
-            },
-            {
-                "name": "Azure Key Vault",
-                "name_es": "Azure Key Vault",
-                "name_pt": "Azure Key Vault",
-                "description": "Centralize secrets, keys, and certificates with controlled access, rotation, and lifecycle protection.",
-                "description_es": "Centralice secretos, claves y certificados con acceso controlado, rotación y protección del ciclo de vida.",
-                "description_pt": "Centralize segredos, chaves e certificados com acesso controlado, rotação e proteção do ciclo de vida.",
-                "keywords": ("key vault", "secret", "certificate", "credential", "access key"),
-                "url": "https://learn.microsoft.com/azure/key-vault/general/overview",
-            },
-            {
-                "name": "Azure Cost Management budgets",
-                "name_es": "Presupuestos de Azure Cost Management",
-                "name_pt": "Orçamentos do Azure Cost Management",
-                "description": "Add budget guardrails and cost alerts while teams remove idle assets, right-size workloads, and evaluate commitment discounts.",
-                "description_es": "Agregue controles presupuestarios y alertas de costos mientras los equipos eliminan activos inactivos, ajustan cargas y evalúan descuentos por compromiso.",
-                "description_pt": "Adicione controles de orçamento e alertas de custo enquanto as equipes removem ativos ociosos, redimensionam cargas de trabalho e avaliam descontos por compromisso.",
-                "keywords": ("cost", "orphan", "unused", "underutil", "idle", "savings", "rightsiz", "reservation", "deallocated", "unattached"),
-                "url": "https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets",
-            },
-        ]
-        severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
-        recommendations = []
-        for rule in rules:
-            evidence = []
-            for item in self.engine.action_items:
-                searchable = " ".join(str(item.get(field, "")) for field in ("title", "description")).lower()
-                if any(keyword in searchable for keyword in rule["keywords"]):
-                    evidence.append(item)
-            if not evidence:
-                continue
-            highest = max((severity_rank.get(str(item.get("severity", "")).lower(), 0) for item in evidence), default=0)
-            priority = "high" if highest >= 3 else "medium" if highest == 2 else "low"
-            recommendations.append({**rule, "evidence": evidence, "priority": priority})
+    _IMPLEMENTATION_GUIDES = (
+        (r"\b(ddos)\b", "Azure DDoS Protection", "https://learn.microsoft.com/azure/ddos-protection/ddos-protection-overview"),
+        (r"\b(defender for cloud|defender cspm|defender for (servers|storage|sql|containers|app service|apis|key vault|resource manager))\b", "Microsoft Defender for Cloud", "https://learn.microsoft.com/azure/defender-for-cloud/defender-for-cloud-introduction"),
+        (r"\b(backups?|recovery services|cross region restore|recovery point)\b", "Azure Backup", "https://learn.microsoft.com/azure/backup/backup-overview"),
+        (r"\b(diagnostic settings?|diagnostic logs?|log analytics|azure monitor based alerts|container monitoring|application health monitoring)\b", "Azure Monitor", "https://learn.microsoft.com/azure/azure-monitor/fundamentals/overview"),
+        (r"\b(policy assignment|policy evaluation|policy compliance|resource locks?|resources? (?:have|has) no tags)\b", "Azure Policy", "https://learn.microsoft.com/azure/governance/policy/overview"),
+        (r"\b(orphaned|unattached|deallocated|underutilized|unused/empty|reservation/savings plan|reserved instance|savings plan)\b", "Azure Cost Management", "https://learn.microsoft.com/azure/cost-management-billing/costs/overview-cost-management"),
+        (r"\b(postgresql|postgres)\b", "Azure Database for PostgreSQL", "https://learn.microsoft.com/azure/well-architected/service-guides/postgresql"),
+        (r"\b(cosmos db|cosmosdb)\b", "Azure Cosmos DB", "https://learn.microsoft.com/azure/well-architected/service-guides/cosmos-db"),
+        (r"\b(azure sql|sql database|sql server|sql managed instance)\b", "Azure SQL", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-sql-database"),
+        (r"\b(aks|kubernetes|kubernetes service)\b", "Azure Kubernetes Service", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-kubernetes-service"),
+        (r"\b(app service|web app)\b", "Azure App Service", "https://learn.microsoft.com/azure/well-architected/service-guides/app-service-web-apps"),
+        (r"\b(application gateway)\b", "Azure Application Gateway", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-application-gateway"),
+        (r"\b(load balancer)\b", "Azure Load Balancer", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-load-balancer"),
+        (r"\b(azure firewall|firewall policy)\b", "Azure Firewall", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-firewall"),
+        (r"\b(front door)\b", "Azure Front Door", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-front-door"),
+        (r"\b(service bus)\b", "Azure Service Bus", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-service-bus"),
+        (r"\b(event hub|event hubs)\b", "Azure Event Hubs", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-event-hubs"),
+        (r"\b(api management)\b", "Azure API Management", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-api-management"),
+        (r"\b(azure function|function app)\b", "Azure Functions", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-functions"),
+        (r"\b(azure managed redis|azure cache for redis)\b", "Azure Managed Redis", "https://learn.microsoft.com/azure/redis/overview"),
+        (r"\b(key vault)\b", "Azure Key Vault", "https://learn.microsoft.com/azure/key-vault/general/overview"),
+        (r"\b(storage accounts?|blob storage)\b", "Azure Blob Storage", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-blob-storage"),
+        (r"\b(managed disk|data disk|premium ssd)\b", "Azure Disk Storage", "https://learn.microsoft.com/azure/well-architected/service-guides/azure-disk-storage"),
+        (r"\b(virtual network|vnet)\b", "Azure Virtual Network", "https://learn.microsoft.com/azure/well-architected/service-guides/virtual-network"),
+        (r"(?:\b(?:virtual machine|virtual machines|vms|vmss)\b|vm\(s\))", "Azure Virtual Machines", "https://learn.microsoft.com/azure/well-architected/service-guides/virtual-machines"),
+    )
 
-        priority_rank = {"high": 0, "medium": 1, "low": 2}
-        return sorted(recommendations, key=lambda rec: (priority_rank[rec["priority"]], -len(rec["evidence"]), rec["name"]))
+    _PILLAR_GUIDES = {
+        "Reliability": "https://learn.microsoft.com/azure/well-architected/reliability/",
+        "Security": "https://learn.microsoft.com/azure/well-architected/security/",
+        "Cost Optimization": "https://learn.microsoft.com/azure/well-architected/cost-optimization/",
+        "Operational Excellence": "https://learn.microsoft.com/azure/well-architected/operational-excellence/",
+        "Performance Efficiency": "https://learn.microsoft.com/azure/well-architected/performance-efficiency/",
+    }
+
+    _VISIBLE_RECOMMENDATIONS = 4
+
+    @staticmethod
+    def _affected_count(action: dict) -> int:
+        title = str(action.get("title", ""))
+        match = re.match(r"^\s*(\d+)(?:/\d+)?\b", title)
+        if match:
+            return int(match.group(1))
+        return max(1, len(action.get("resources", [])))
+
+    def _implementation_guide(self, action: dict) -> dict:
+        searchable = " ".join(str(action.get(field, "")) for field in ("title", "description")).lower()
+        for pattern, service, url in self._IMPLEMENTATION_GUIDES:
+            if re.search(pattern, searchable, re.IGNORECASE):
+                return {"service": service, "url": url, "confidence": "direct"}
+        pillar = str(action.get("pillar", "Operational Excellence"))
+        return {
+            "service": f"{pillar} architecture review",
+            "url": self._PILLAR_GUIDES.get(pillar, "https://learn.microsoft.com/azure/well-architected/"),
+            "confidence": "review",
+        }
+
+    @staticmethod
+    def _normalized_title(action: dict) -> str:
+        title = re.sub(r"^\d+(?:/\d+)?\s+(?:resource\(s\) affected:\s*)?", "", str(action.get("title", "")).strip().lower())
+        return re.sub(r"\s+", " ", title)
+
+    def _recommend_azure_resources(self, limit: int = 12) -> list:
+        """Return the highest-priority observed remediations with optional implementation guidance.
+
+        The first `limit` cards are chosen by severity and affected scope (at most three per pillar).
+        On top of that, each pillar reserves one extra slot for its best remaining high/critical
+        finding, so a serious finding with a small scope is not crowded out by high-volume ones.
+        Advisor labels most findings "High", so the reserved slot is ranked by severity, then
+        confirmed internet exposure, then findings measured by this toolkit before generic Advisor ones.
+        """
+        severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+        def severity_of(item: dict) -> int:
+            return severity_rank.get(str(item.get("severity", "")).lower(), 0)
+
+        ranked = sorted(
+            self.engine.action_items,
+            key=lambda item: (-severity_of(item), -self._affected_count(item), str(item.get("title", ""))),
+        )
+
+        recommendations = []
+        pillar_counts = defaultdict(int)
+        seen = set()
+        for action in ranked:
+            normalized = self._normalized_title(action)
+            if not normalized or normalized in seen:
+                continue
+            pillar = str(action.get("pillar", "Operational Excellence"))
+            if pillar_counts[pillar] >= 3:
+                continue
+            seen.add(normalized)
+            pillar_counts[pillar] += 1
+            recommendations.append({
+                "action": action,
+                "affected": self._affected_count(action),
+                "guide": self._implementation_guide(action),
+                "reserved": False,
+            })
+            if len(recommendations) >= limit:
+                break
+
+        reserved_ranked = sorted(
+            (item for item in self.engine.action_items if severity_of(item) >= 3),
+            key=lambda item: (
+                -severity_of(item),
+                not item.get("internet_exposed", False),
+                str(item.get("source", "")) == "Azure Advisor",
+                -self._affected_count(item),
+                str(item.get("title", "")),
+            ),
+        )
+        reserved_pillars = set()
+        for action in reserved_ranked:
+            normalized = self._normalized_title(action)
+            pillar = str(action.get("pillar", "Operational Excellence"))
+            if not normalized or normalized in seen or pillar in reserved_pillars:
+                continue
+            seen.add(normalized)
+            reserved_pillars.add(pillar)
+            recommendations.append({
+                "action": action,
+                "affected": self._affected_count(action),
+                "guide": self._implementation_guide(action),
+                "reserved": True,
+            })
+        return recommendations
 
     def _render_azure_resource_recommendations(self) -> str:
         recommendations = self._recommend_azure_resources()
@@ -2134,29 +2446,67 @@ class DashboardGenerator:
         priority_es = {"high": "Alta", "medium": "Media", "low": "Baja"}
         priority_pt = {"high": "Alta", "medium": "Média", "low": "Baixa"}
         cards = []
-        for recommendation in recommendations:
-            evidence_items = "".join(
-                f'<li>{bi(escape(str(item.get("title", ""))), escape(str(item.get("title_es", item.get("title", "")))), escape(str(item.get("title_pt", item.get("title", "")))))}</li>'
-                for item in recommendation["evidence"][:3]
+        for index, recommendation in enumerate(recommendations):
+            action = recommendation["action"]
+            guide = recommendation["guide"]
+            hidden_attr = ' hidden' if index >= self._VISIBLE_RECOMMENDATIONS else ''
+            extra_class = ' extra-row' if index >= self._VISIBLE_RECOMMENDATIONS else ''
+            priority = str(action.get("severity", "medium")).lower()
+            if priority not in priority_es:
+                priority = "high" if priority == "critical" else "medium"
+            resources = []
+            for resource in action.get("resources", [])[:3]:
+                if isinstance(resource, dict):
+                    resource = resource.get("name") or resource.get("id") or ""
+                if resource:
+                    resources.append(str(resource))
+            evidence_items = (
+                f"<li>{bi('Source', 'Fuente', 'Fonte')}: {escape(str(action.get('source', 'Assessment analysis')))}</li>"
+                f"<li>{bi('WAF pillar', 'Pilar WAF', 'Pilar WAF')}: {escape(str(action.get('pillar', '')))}</li>"
             )
-            remaining = len(recommendation["evidence"]) - 3
-            if remaining > 0:
-                evidence_items += f'<li class="resource-rec-more">{bi(f"+ {remaining} more supporting findings", f"+ {remaining} hallazgos de soporte adicionales", f"+ {remaining} descobertas de suporte adicionais")}</li>'
-            priority = recommendation["priority"]
-            cards.append(f"""<article class="resource-rec-card resource-rec-{priority}">
+            if recommendation.get("reserved"):
+                evidence_items += (
+                    f"<li>{bi('Reserved slot: high severity, smaller scope', 'Espacio reservado: severidad alta, alcance menor', 'Espaço reservado: severidade alta, escopo menor')}</li>"
+                )
+            evidence_items += "".join(
+                f"<li>{bi('Example resource', 'Recurso de ejemplo', 'Recurso de exemplo')}: {escape(resource)}</li>"
+                for resource in resources
+            )
+            confidence_text = bi(
+                "Direct service match" if guide["confidence"] == "direct" else "Architecture review required",
+                "Asociación directa al servicio" if guide["confidence"] == "direct" else "Requiere revisión de arquitectura",
+                "Associação direta ao serviço" if guide["confidence"] == "direct" else "Requer revisão de arquitetura",
+            )
+            subscriptions_attr = f' data-subscriptions="{escape(json.dumps(action["subscriptions"], ensure_ascii=False))}"' if action.get("subscriptions") else ""
+            cards.append(f"""<article class="resource-rec-card resource-rec-{priority}{extra_class}"{hidden_attr}{subscriptions_attr}>
                 <div class="resource-rec-heading">
                     <div>
                         <span class="resource-rec-priority">{bi(priority.title() + ' priority', 'Prioridad ' + priority_es[priority], 'Prioridade ' + priority_pt[priority])}</span>
-                        <h3>{bi(escape(recommendation['name']), escape(recommendation['name_es']), escape(recommendation['name_pt']))}</h3>
+                        <h3>{bi(escape(str(action.get('title', ''))), escape(str(action.get('title_es', action.get('title', '')))), escape(str(action.get('title_pt', action.get('title', '')))))}</h3>
                     </div>
-                    <span class="resource-rec-count">{len(recommendation['evidence'])} {bi('findings', 'hallazgos', 'descobertas')}</span>
+                    <span class="resource-rec-count">{recommendation['affected']} {bi('affected', 'afectados', 'afetados')}</span>
                 </div>
-                <p>{bi(escape(recommendation['description']), escape(recommendation['description_es']), escape(recommendation['description_pt']))}</p>
-                <div class="resource-rec-evidence-label">{bi('Recommended because', 'Recomendado por', 'Recomendado porque')}</div>
+                <p>{bi(escape(str(action.get('description', ''))), escape(str(action.get('description_es', action.get('description', '')))), escape(str(action.get('description_pt', action.get('description', '')))))}</p>
+                <div class="resource-rec-implementation">
+                    <span>{bi('Suggested implementation', 'Implementación sugerida', 'Implementação sugerida')}</span>
+                    <strong>{escape(guide['service'])}</strong>
+                    <small>{confidence_text}</small>
+                </div>
+                <div class="resource-rec-evidence-label">{bi('Evidence', 'Evidencia', 'Evidência')}</div>
                 <ul>{evidence_items}</ul>
-                <a class="resource-rec-link" href="{escape(recommendation['url'])}" target="_blank" rel="noopener">{bi('Review on Microsoft Learn', 'Revisar en Microsoft Learn', 'Revisar no Microsoft Learn')} &rarr;</a>
+                <a class="resource-rec-link" href="{escape(guide['url'])}" target="_blank" rel="noopener">{bi('Review official guidance', 'Revisar guía oficial', 'Revisar orientação oficial')} &rarr;</a>
             </article>""")
-        return f'<div class="resource-rec-grid">{"".join(cards)}</div>'
+        grid = f'<div class="resource-rec-grid" data-visible="{self._VISIBLE_RECOMMENDATIONS}">{"".join(cards)}</div>'
+        hidden_count = len(recommendations) - self._VISIBLE_RECOMMENDATIONS
+        if hidden_count <= 0:
+            return grid
+        count = f'<span class="rec-more-count">{hidden_count}</span>'
+        more_text = bi(f"Show {count} more", f"Mostrar {count} m\u00e1s", f"Mostrar mais {count}")
+        less_text = bi("Show less", "Mostrar menos", "Mostrar menos")
+        return (
+            f'{grid}<button type="button" class="table-more-note" onclick="toggleTableRows(this)">'
+            f'<span class="more-label">{more_text}</span><span class="less-label">{less_text}</span></button>'
+        )
 
     def _render_governance_view(self) -> str:
         """Render management-group hierarchy, policy/RBAC, and scope details natively (no iframe to a separate HTML file)."""
@@ -2198,6 +2548,32 @@ class DashboardGenerator:
 
         mg_rows = real_rows("MgmtGroups")
         subs_rows = real_rows("Subscriptions")
+        hierarchy_inferred = False
+        if not mg_rows:
+            subscriptions_by_parent = defaultdict(list)
+            for subscription in subs_rows:
+                parent_name = str(subscription.get("mgParent", "") or "").strip()
+                if parent_name:
+                    subscriptions_by_parent[parent_name].append(subscription)
+            if subscriptions_by_parent:
+                hierarchy_inferred = True
+                mg_rows = [
+                    {
+                        "Level": 0,
+                        "DisplayName": parent_name,
+                        "Id": f"inferred-{hashlib.sha1(parent_name.encode('utf-8')).hexdigest()[:12]}",
+                        "Path": parent_name,
+                        "ChildMGs": 0,
+                        "Subscriptions": len(subscriptions),
+                        "SubNames": "; ".join(
+                            str(subscription.get("name", subscription.get("subscriptionId", "")))
+                            for subscription in subscriptions
+                        ),
+                        "ParentId": "",
+                        "Inferred": True,
+                    }
+                    for parent_name, subscriptions in sorted(subscriptions_by_parent.items())
+                ]
         policy_assignments = real_rows("PolicyAssignments")
         custom_policies = real_rows("CustomPolicies")
         policy_compliance = real_rows("PolicyCompliance")
@@ -2587,6 +2963,14 @@ class DashboardGenerator:
                 ("name", "Id", "Id", False),
                 ("parent", "Parent", "Padre", False),
             ], "No management group data found.", "No se encontraron datos de grupos de administraci\u00f3n.")
+        hierarchy_note_html = ""
+        if hierarchy_inferred:
+            hierarchy_note_text = bi(
+                "Management Group nodes were inferred from each subscription's immediate mgParent value because the tenant-root hierarchy was not available.",
+                "Los nodos de Grupos de Administración se infirieron del valor mgParent inmediato de cada suscripción porque la jerarquía del tenant root no estaba disponible.",
+                "Os nós de Grupos de Gerenciamento foram inferidos do valor mgParent imediato de cada assinatura porque a hierarquia da raiz do tenant não estava disponível.",
+            )
+            hierarchy_note_html = f'<p class="table-truncated-note">{hierarchy_note_text}</p>'
 
         scope_items = []
         if has_hierarchy:
@@ -2646,7 +3030,7 @@ class DashboardGenerator:
             ("subPlan", "Sub-plan", "Sub-plan", False),
         ], "No Defender for Cloud plans found.", "No se encontraron planes de Defender for Cloud.")
         secure_scores_table = render_table(secure_scores, [
-            ("subscriptionId", "Subscription", "Suscripci\u00f3n", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("pct", "Score %", "Puntaje %", True),
         ], "No Secure Score data found.", "No se encontraron datos de Secure Score.")
         resource_summary_table = render_table(resource_summary, [
@@ -2657,6 +3041,7 @@ class DashboardGenerator:
         orphaned_table = render_table(orphaned, [
             ("Type", "Type", "Tipo", False),
             ("Name", "Name", "Nombre", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("Detail", "Detail", "Detalle", False),
         ], "No orphaned resources found.", "No se encontraron recursos hu\u00e9rfanos.")
@@ -2690,6 +3075,7 @@ class DashboardGenerator:
 
         <div class="section">
             <div class="section-title security-title">{bi('Hierarchy map', 'Mapa de jerarqu\u00eda', 'Mapa de hierarquia')}{it('Interactive org-chart of Management Groups and Subscriptions (expand a subscription to see its Resource Groups/resources), built from the Governance export.', 'Organigrama interactivo de Grupos de Administraci\u00f3n y Suscripciones (expande una suscripci\u00f3n para ver sus Grupos de Recursos/recursos), construido desde la exportaci\u00f3n de Governance.', 'Organograma interativo de Grupos de Gerenciamento e Assinaturas (expanda uma assinatura para ver seus Grupos de Recursos/recursos), constru\u00eddo a partir da exporta\u00e7\u00e3o do Governance.')}</div>
+            {hierarchy_note_html}
             {hierarchy_html}
         </div>
         <div class="section">
@@ -3030,6 +3416,7 @@ class DashboardGenerator:
             ("currentSku", "Current SKU", "SKU Actual", False),
             ("targetSku", "Target SKU", "SKU Objetivo", False),
             ("AnnualSavingsDisplay", "Annual Savings", "Ahorro Anual", True),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor cost recommendations found.", "No se encontraron recomendaciones de costos de Advisor.")
         reservation_table = render_table(reservation_recs, [
@@ -3082,17 +3469,20 @@ class DashboardGenerator:
         orphaned_table = render_table(orphaned, [
             ("Type", "Type", "Tipo", False),
             ("Name", "Name", "Nombre", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("Detail", "Detail", "Detalle", False),
         ], "No orphaned resources found.", "No se encontraron recursos hu\u00e9rfanos.")
         dealloc_table = render_table(dealloc_vms, [
             ("name", "VM", "VM", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("vmSize", "Size", "Tama\u00f1o", False),
             ("location", "Location", "Ubicaci\u00f3n", False),
         ], "No deallocated VMs found.", "No se encontraron VMs desasignadas.")
         unattached_disks_table = render_table(unattached_disks, [
             ("name", "Disk", "Disco", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("diskSizeGB", "Size (GB)", "Tama\u00f1o (GB)", True),
             ("skuName", "SKU", "SKU", False),
@@ -3381,8 +3771,9 @@ class DashboardGenerator:
         title_text = bi(action['title'], action.get('title_es', action['title']), action.get('title_pt', action['title']))
         desc_text = bi(action['description'], action.get('description_es', action['description']), action.get('description_pt', action['description']))
         item_id = self._action_item_id(action)
+        subscriptions_attr = f' data-subscriptions="{escape(json.dumps(action["subscriptions"], ensure_ascii=False))}"' if action.get("subscriptions") else ""
         return f"""
-            <div class="action-item" data-item-id="{item_id}" data-pillar="{escape(action['pillar'])}" data-severity="{action['severity']}" style="border-left: 4px solid {color};">
+            <div class="action-item" data-item-id="{item_id}" data-pillar="{escape(action['pillar'])}" data-severity="{action['severity']}"{subscriptions_attr} style="border-left: 4px solid {color};">
                 <div class="action-header">
                     <label class="action-check-wrap" title="Dismiss / Descartar">
                         <input type="checkbox" class="action-check" data-item-id="{item_id}">
@@ -3410,8 +3801,8 @@ class DashboardGenerator:
         if not rows:
             return f'<p class="empty-state">{bi("Score breakdown unavailable.", "Desglose de puntaje no disponible.", "Detalhamento de pontua\u00e7\u00e3o indispon\u00edvel.")}</p>'
         rows_html = "".join(
-            f"<tr><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
-            f"<td class='num'>{r['healthy']}/{r['total']}</td><td class='num'>{r['pct']}%</td></tr>"
+            f"<tr data-subcat=\"{escape(pillar)}|{escape(r['subcategory'])}\"><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
+            f"<td class='num sc-ht'>{r['healthy']}/{r['total']}</td><td class='num sc-pct'>{r['pct']}%</td></tr>"
             for r in rows
         )
         return f"""<div class="security-table-wrap"><table>
@@ -3485,7 +3876,7 @@ class DashboardGenerator:
 
         score = self.engine.scores.get("Reliability", 0)
         stats = [
-            (f"{score}/100", bi("Reliability Score", "Puntaje de Confiabilidad", "Pontua\u00e7\u00e3o de Confiabilidade"), "security-accent"),
+            (f'<span data-score="Reliability" data-score-suffix="/100">{score}/100</span>', bi("Reliability Score", "Puntaje de Confiabilidad", "Pontua\u00e7\u00e3o de Confiabilidade"), "security-accent"),
             (len(vms_no_zone), bi("VMs without Availability Zone", "VMs sin Zona de Disponibilidad", "VMs sem Zona de Disponibilidade"), "security-warning" if vms_no_zone else ""),
             (len(backups), bi("Backup Vaults Found", "Vaults de Backup Encontrados", "Vaults de Backup Encontrados"), "" if backups else "security-danger"),
             (len(vnets_no_ddos), bi("VNets without DDoS Protection", "VNets sin Protecci\u00f3n DDoS", "VNets sem Prote\u00e7\u00e3o DDoS"), "security-warning" if vnets_no_ddos else ""),
@@ -3501,6 +3892,7 @@ class DashboardGenerator:
 
         vms_table = render_table(vms_no_zone, [
             ("name", "VM", "VM", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("location", "Location", "Ubicaci\u00f3n", False),
             ("vmSize", "Size", "Tama\u00f1o", False),
@@ -3508,11 +3900,13 @@ class DashboardGenerator:
         ], "All VMs are deployed across Availability Zones.", "Todas las VMs est\u00e1n desplegadas en Zonas de Disponibilidad.")
         backups_table = render_table(backups, [
             ("name", "Backup Vault", "Vault de Backup", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("location", "Location", "Ubicaci\u00f3n", False),
         ], "No Backup/Recovery Services vaults found.", "No se encontraron vaults de Backup/Recovery Services.")
         vnets_table = render_table(vnets_no_ddos, [
             ("name", "VNet", "VNet", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("addressSpace", "Address Space", "Espacio de Direcciones", False),
         ], "All VNets have DDoS Protection enabled.", "Todas las VNets tienen Protecci\u00f3n DDoS habilitada.")
@@ -3521,6 +3915,7 @@ class DashboardGenerator:
             ("impactedResource", "Resource", "Recurso", False),
             ("problem", "Problem", "Problema", False),
             ("solution", "Solution", "Soluci\u00f3n", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor reliability recommendations found.", "No se encontraron recomendaciones de confiabilidad de Advisor.")
         impact_counts = defaultdict(int)
@@ -3563,7 +3958,7 @@ class DashboardGenerator:
                 <h2>{bi('High availability and disaster recovery', 'Alta disponibilidad y recuperaci\u00f3n ante desastres', 'Alta disponibilidade e recupera\u00e7\u00e3o de desastres')}</h2>
                 <p>{bi('Availability Zones, backup coverage, DDoS protection, and Advisor high-availability recommendations in one view.', 'Zonas de Disponibilidad, cobertura de backup, protecci\u00f3n DDoS y recomendaciones de alta disponibilidad de Advisor en una sola vista.', 'Zonas de Disponibilidade, cobertura de backup, prote\u00e7\u00e3o DDoS e recomenda\u00e7\u00f5es de alta disponibilidade do Advisor em uma \u00fanica vis\u00e3o.')}</p>
             </div>
-            <div class="security-score-mark" style="color: var(--cp-link);">{score}/100</div>
+            <div class="security-score-mark" style="color: var(--cp-link);"><span data-score="Reliability" data-score-suffix="/100">{score}/100</span></div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
@@ -3643,7 +4038,7 @@ class DashboardGenerator:
 
         score = self.engine.scores.get("Performance Efficiency", 0)
         stats = [
-            (f"{score}/100", bi("Performance Score", "Puntaje de Rendimiento", "Pontua\u00e7\u00e3o de Desempenho"), "security-accent"),
+            (f'<span data-score="Performance Efficiency" data-score-suffix="/100">{score}/100</span>', bi("Performance Score", "Puntaje de Rendimiento", "Pontua\u00e7\u00e3o de Desempenho"), "security-accent"),
             (len(saturated_vm), bi("Saturated VMs (>80% CPU)", "VMs Saturadas (>80% CPU)", "VMs Saturadas (>80% CPU)"), "security-danger" if saturated_vm else ""),
             (len(saturated_sql), bi("Saturated SQL DBs", "BD SQL Saturadas", "BDs SQL Saturados"), "security-danger" if saturated_sql else ""),
             (len(perf_recs), bi("Advisor Performance Recs", "Recom. de Rendimiento", "Recom. de Desempenho"), ""),
@@ -3655,6 +4050,7 @@ class DashboardGenerator:
 
         vm_table = render_table(saturated_vm, [
             ("Name", "VM", "VM", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("VMSize", "Size", "Tama\u00f1o", False),
             ("AvgCPU_Pct", "Avg CPU %", "CPU Prom. %", True),
@@ -3662,6 +4058,7 @@ class DashboardGenerator:
         ], "No saturated VMs found.", "No se encontraron VMs saturadas.")
         sql_table = render_table(saturated_sql, [
             ("Name", "Database", "Base de Datos", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("SKU", "SKU", "SKU", False),
             ("MetricType", "Metric", "M\u00e9trica", False),
@@ -3672,6 +4069,7 @@ class DashboardGenerator:
             ("impactedResource", "Resource", "Recurso", False),
             ("problem", "Problem", "Problema", False),
             ("solution", "Solution", "Soluci\u00f3n", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor performance recommendations found.", "No se encontraron recomendaciones de rendimiento de Advisor.")
 
@@ -3682,7 +4080,7 @@ class DashboardGenerator:
                 <h2>{bi('Workload scaling and utilization', 'Escalado y utilizaci\u00f3n de cargas de trabajo', 'Escalonamento e utiliza\u00e7\u00e3o de cargas de trabalho')}</h2>
                 <p>{bi('Saturated VMs and SQL databases, plus Advisor performance recommendations in one view.', 'VMs y bases de datos SQL saturadas, m\u00e1s recomendaciones de rendimiento de Advisor en una sola vista.', 'VMs e bancos de dados SQL saturados, al\u00e9m das recomenda\u00e7\u00f5es de desempenho do Advisor em uma \u00fanica vis\u00e3o.')}</p>
             </div>
-            <div class="security-score-mark" style="color: var(--cp-warning);">{score}/100</div>
+            <div class="security-score-mark" style="color: var(--cp-warning);"><span data-score="Performance Efficiency" data-score-suffix="/100">{score}/100</span></div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
@@ -3768,6 +4166,7 @@ class DashboardGenerator:
                     untagged.append({
                         "Type": sheet,
                         "Name": r.get("name", r.get("Name", "")),
+                        "Subscription": r.get("Subscription", ""),
                         "ResourceGroup": r.get("resourceGroup", r.get("ResourceGroup", "")),
                     })
 
@@ -3778,7 +4177,7 @@ class DashboardGenerator:
 
         score = self.engine.scores.get("Operational Excellence", 0)
         stats = [
-            (f"{score}/100", bi("OpEx Score", "Puntaje OpEx", "Pontua\u00e7\u00e3o OpEx"), "security-accent"),
+            (f'<span data-score="Operational Excellence" data-score-suffix="/100">{score}/100</span>', bi("OpEx Score", "Puntaje OpEx", "Pontua\u00e7\u00e3o OpEx"), "security-accent"),
             (len(no_diag), bi("Missing Diagnostic Settings", "Sin Configuraci\u00f3n de Diagn\u00f3stico", "Sem Configura\u00e7\u00e3o de Diagn\u00f3stico"), "security-warning" if no_diag else ""),
             (f"{len(untagged)}/{total_taggable}", bi("Untagged Resources", "Recursos sin Etiquetas", "Recursos sem Tags"), "security-warning" if untagged else ""),
             (len(locks), bi("Resource Locks", "Bloqueos de Recursos", "Bloqueios de Recursos"), "" if locks else "security-danger"),
@@ -3793,12 +4192,14 @@ class DashboardGenerator:
         diag_table = render_table(no_diag, [
             ("Name", "Resource", "Recurso", False),
             ("Type", "Type", "Tipo", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
             ("Gap", "Gap", "Brecha", False),
         ], "All critical resources have diagnostic settings configured.", "Todos los recursos cr\u00edticos tienen configuraci\u00f3n de diagn\u00f3stico.")
         tags_table = render_table(untagged, [
             ("Type", "Resource Type", "Tipo de Recurso", False),
             ("Name", "Name", "Nombre", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("ResourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "All resources are tagged.", "Todos los recursos tienen etiquetas.")
         locks_table = render_table(locks, [
@@ -3811,6 +4212,7 @@ class DashboardGenerator:
             ("impactedResource", "Resource", "Recurso", False),
             ("problem", "Problem", "Problema", False),
             ("solution", "Solution", "Soluci\u00f3n", False),
+            ("Subscription", "Subscription", "Suscripci\u00f3n", False),
             ("resourceGroup", "Resource Group", "Grupo de Recursos", False),
         ], "No Advisor operational excellence recommendations found.", "No se encontraron recomendaciones de excelencia operativa de Advisor.")
 
@@ -3821,7 +4223,7 @@ class DashboardGenerator:
                 <h2>{bi('Observability, tagging, and governance hygiene', 'Observabilidad, etiquetado e higiene de gobernanza', 'Observabilidade, etiquetagem e higiene de governan\u00e7a')}</h2>
                 <p>{bi('Diagnostic settings coverage, tagging compliance, resource locks, and Advisor operational recommendations in one view.', 'Cobertura de configuraci\u00f3n de diagn\u00f3stico, cumplimiento de etiquetado, bloqueos de recursos y recomendaciones operativas de Advisor en una sola vista.', 'Cobertura de configura\u00e7\u00e3o de diagn\u00f3stico, conformidade de etiquetagem, bloqueios de recursos e recomenda\u00e7\u00f5es operacionais do Advisor em uma \u00fanica vis\u00e3o.')}</p>
             </div>
-            <div class="security-score-mark" style="color: var(--cp-accent);">{score}/100</div>
+            <div class="security-score-mark" style="color: var(--cp-accent);"><span data-score="Operational Excellence" data-score-suffix="/100">{score}/100</span></div>
         </div>
         <div class="security-stats">{stat_html}</div>
 
@@ -3917,15 +4319,15 @@ class DashboardGenerator:
             </div>"""
             def pct_bar_cell(pct):
                 color = "var(--cp-success)" if pct >= 80 else "var(--cp-warning)" if pct >= 50 else "var(--cp-danger)"
-                return f"<td class='num'><div class='inline-bar-wrap'><div class='inline-bar-track'><div class='inline-bar-fill' style='width:{pct}%; background:{color};'></div></div><span>{pct}%</span></div></td>"
+                return f"<td class='num sc-pct'><div class='inline-bar-wrap'><div class='inline-bar-track'><div class='inline-bar-fill' style='width:{pct}%; background:{color};'></div></div><span>{pct}%</span></div></td>"
 
             rows_html = "".join(
-                f"<tr><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
-                f"<td class='num'>{r['healthy']}/{r['total']}</td>{pct_bar_cell(r['pct'])}</tr>"
+                f"<tr data-subcat=\"{escape(pillar)}|{escape(r['subcategory'])}\"><td>{bi(str(r['subcategory']), str(SUBCATEGORY_ES.get(r['subcategory'], r['subcategory'])), str(SUBCATEGORY_PT.get(r['subcategory'], r['subcategory'])))}</td><td class='num'>{r['weight']}</td>"
+                f"<td class='num sc-ht'>{r['healthy']}/{r['total']}</td>{pct_bar_cell(r['pct'])}</tr>"
                 for r in info["rows"]
             )
             return f"""<div class="breakdown-card">
-                <h4>{pillar_label(pillar)} <span class="breakdown-score">{self.engine.scores[pillar]}/100</span></h4>
+                <h4>{pillar_label(pillar)} <span class="breakdown-score" data-score="{pillar}" data-score-suffix="/100">{self.engine.scores[pillar]}/100</span></h4>
                 <div class="breakdown-table-wrap">
                     <table class="subcategory-table">
                         <colgroup><col class="subcat-name-col"><col class="subcat-num-col"><col class="subcat-num-col"><col class="subcat-score-col"></colgroup>
@@ -3945,14 +4347,17 @@ class DashboardGenerator:
                 f"<tr><td>{bi(label_en, label_es, label_pt)}</td><td class='num'>{count}</td></tr>"
                 for label_en, label_es, label_pt, count in security.get("findings", [])
             )
+            scored = f"<span data-secure-scored>{security.get('subscriptions_scored', 0)}</span>"
+            pct = f"<strong data-secure-pct>{security.get('secure_score_pct')}%</strong>"
             note = bi(
-                f"Microsoft Defender Secure Score average across {security.get('subscriptions_scored', 0)} subscription(s): <strong>{security.get('secure_score_pct')}%</strong>.",
-                f"Promedio del Secure Score de Microsoft Defender en {security.get('subscriptions_scored', 0)} suscripci\u00f3n(es): <strong>{security.get('secure_score_pct')}%</strong>.",
-                f"M\u00e9dia do Secure Score da Microsoft Defender em {security.get('subscriptions_scored', 0)} assinatura(s): <strong>{security.get('secure_score_pct')}%</strong>."
+                f"Microsoft Defender Secure Score average across {scored} subscription(s): {pct}.",
+                f"Promedio del Secure Score de Microsoft Defender en {scored} suscripci\u00f3n(es): {pct}.",
+                f"M\u00e9dia do Secure Score da Microsoft Defender em {scored} assinatura(s): {pct}."
             )
             sections.append(f"""<div class="breakdown-card">
-                <h4>{pillar_label('Security')} <span class="breakdown-score">{self.engine.scores['Security']}/100</span></h4>
+                <h4>{pillar_label('Security')} <span class="breakdown-score" data-score="Security" data-score-suffix="/100">{self.engine.scores['Security']}/100</span></h4>
                 <p class="breakdown-note">{note}</p>
+                <p class="breakdown-note secure-gap-note" data-pillar-note="Security" hidden></p>
                 <table>
                     <thead><tr><th>{bi('Finding Category', 'Categor\u00eda de Hallazgo', 'Categoria da Descoberta')}</th><th>{bi('Count', 'Cantidad', 'Quantidade')}</th></tr></thead>
                     <tbody>{findings_html}</tbody>
@@ -3976,20 +4381,20 @@ class DashboardGenerator:
                 name = source["name"]
                 affected = min(source["affected"], cost["total"])
                 source_healthy = max(0, cost["total"] - affected)
-                source_score = round((source_healthy / cost["total"]) * 100)
+                source_score = round_half_up((source_healthy / cost["total"]) * 100)
                 source_rows.append(
-                    f"<tr><td>{bi(str(name), str(COST_SOURCE_ES.get(name, name)), str(COST_SOURCE_PT.get(name, name)))}</td>"
-                    f"<td class='num'>{source['count']} / {affected}</td>"
-                    f"<td class='num'>{source_healthy}/{cost['total']}</td>"
-                    f"<td class='num'>{source_score}%</td></tr>"
+                    f"<tr data-cost-source=\"{escape(name)}\"><td>{bi(str(name), str(COST_SOURCE_ES.get(name, name)), str(COST_SOURCE_PT.get(name, name)))}</td>"
+                    f"<td class='num cs-count'>{source['count']} / {affected}</td>"
+                    f"<td class='num cs-healthy'>{source_healthy}/{cost['total']}</td>"
+                    f"<td class='num cs-score'>{source_score}%</td></tr>"
                 )
             combined_label = bi("Combined (deduplicated)", "Combinado (sin duplicados)", "Combinado (sem duplicatas)")
             combined_findings = sum(source["count"] for source in cost.get("sources", []))
             source_rows.append(
-                f"<tr><td><strong>{combined_label}</strong></td>"
-                f"<td class='num'><strong>{combined_findings} / {cost['impacted']}</strong></td>"
-                f"<td class='num'><strong>{cost['healthy']}/{cost['total']}</strong></td>"
-                f"<td class='num'><strong>{self.engine.scores['Cost Optimization']}%</strong></td></tr>"
+                f"<tr data-cost-combined><td><strong>{combined_label}</strong></td>"
+                f"<td class='num'><strong class='cs-count'>{combined_findings} / {cost['impacted']}</strong></td>"
+                f"<td class='num'><strong class='cs-healthy'>{cost['healthy']}/{cost['total']}</strong></td>"
+                f"<td class='num'><strong data-score=\"Cost Optimization\" data-score-suffix=\"%\">{self.engine.scores['Cost Optimization']}%</strong></td></tr>"
             )
             sources_html = "".join(source_rows)
             note = bi(
@@ -3998,7 +4403,7 @@ class DashboardGenerator:
                 "Descobertas/Afetados mostra primeiro a contagem de descobertas e depois os escopos ou recursos únicos afetados. A linha combinada remove duplicatas."
             )
             sections.append(f"""<div class="breakdown-card cost-breakdown-card">
-                <h4>{pillar_label('Cost Optimization')} <span class="breakdown-score">{self.engine.scores['Cost Optimization']}/100</span></h4>
+                <h4>{pillar_label('Cost Optimization')} <span class="breakdown-score" data-score="Cost Optimization" data-score-suffix="/100">{self.engine.scores['Cost Optimization']}/100</span></h4>
                 <p class="breakdown-note">{note}</p>
                 <div class="breakdown-table-wrap">
                     <table>
@@ -4023,6 +4428,7 @@ class DashboardGenerator:
     
     def generate(self) -> str:
         overall = self.engine.get_overall_score()
+        overall_color = 'var(--cp-success)' if overall >= 80 else 'var(--cp-warning)' if overall >= 50 else 'var(--cp-danger)'
         scores = self.engine.scores
         progress_banner_html = self._render_progress_banner()
         score_breakdown_html = self._render_score_breakdown()
@@ -4045,15 +4451,16 @@ class DashboardGenerator:
         # on every tab) - drives both the Cost tab's pivot (via its own checkboxes, kept in
         # sync by initGlobalSubscriptionFilter()) and row-hiding on any other table across all
         # tabs that carries a "Subscription" column.
-        all_sub_names = sorted({
-            s.get("name") for s in (
+        sub_id_by_name = {
+            s.get("name"): str(s.get("subscriptionId") or "") for s in (
                 self.data.get("discovery", {}).get("Subscriptions", [])
                 or self.data.get("governance", {}).get("Subscriptions", [])
             ) if s.get("name")
-        })
+        }
+        all_sub_names = sorted(sub_id_by_name)
         if len(all_sub_names) > 1:
             global_sub_checks = "".join(
-                f'<label class="global-sub-check"><input type="checkbox" value="{escape(s)}" checked> {escape(s)}</label>'
+                f'<label class="global-sub-check"><input type="checkbox" value="{escape(s)}" data-sub-id="{escape(sub_id_by_name[s])}" checked> {escape(s)}</label>'
                 for s in all_sub_names
             )
             global_sub_filter_html = f"""<div class="global-sub-filter-bar" id="globalSubFilterBar">
@@ -4061,6 +4468,8 @@ class DashboardGenerator:
     {global_sub_checks}
     <button type="button" class="cost-pivot-selectall" data-mode="all">{bi("All", "Todas", "Todas")}</button>
     <button type="button" class="cost-pivot-selectall" data-mode="none">{bi("None", "Ninguna", "Nenhuma")}</button>
+    <span class="global-sub-filter-count"></span>
+    <span class="global-sub-filter-note">{bi("Filters tables, action items, recommendations, and pillar scores.", "Filtra tablas, elementos de acci\u00f3n, recomendaciones y puntajes por pilar.", "Filtra tabelas, itens de a\u00e7\u00e3o, recomenda\u00e7\u00f5es e pontua\u00e7\u00f5es por pilar.")}</span>
 </div>"""
         else:
             global_sub_filter_html = ""
@@ -4084,6 +4493,7 @@ class DashboardGenerator:
         if severity_present:
             chart_data["actionSeverity"] = {
                 "type": "donut", "canvasId": "actionSeverityChart",
+                "keys": severity_present,
                 "labels": {
                     lang: [SEVERITY_LABELS.get(s, {}).get(lang, s.capitalize()) for s in severity_present]
                     for lang in ("en", "es", "pt")
@@ -4098,6 +4508,7 @@ class DashboardGenerator:
         if pillars_with_actions:
             chart_data["actionByPillar"] = {
                 "type": "hbar", "canvasId": "actionByPillarChart",
+                "keys": pillars_with_actions,
                 "labels": {
                     "en": pillars_with_actions,
                     "es": [PILLAR_ES.get(p, p) for p in pillars_with_actions],
@@ -4112,17 +4523,19 @@ class DashboardGenerator:
         for pillar, sc in scores.items():
             color = DashboardConfig.PILLAR_COLORS[pillar]
             pillar_cards += f"""
-            <div class="pillar-card">
-                <div class="pillar-score" style="color:{color};">{sc}</div>
+            <div class="pillar-card" data-pillar-card="{pillar}">
+                <div class="pillar-score" data-score="{pillar}" style="color:{color};">{sc}</div>
                 <div class="pillar-bar">
                     <div class="pillar-bar-fill" style="width:{sc}%; background:{color};"></div>
                 </div>
                 <div class="pillar-name">{bi(pillar, PILLAR_ES.get(pillar, pillar), PILLAR_PT.get(pillar, pillar))}</div>
+                {'<div class="pillar-note" data-pillar-note="Security" hidden></div>' if pillar == 'Security' else ''}
             </div>"""
 
         # WAF Pillar Scores comparison chart (Overview, below the pillar cards)
         chart_data["pillarScores"] = {
             "type": "hbar", "canvasId": "pillarScoresChart",
+            "keys": list(scores.keys()),
             "labels": {
                 "en": list(scores.keys()),
                 "es": [PILLAR_ES.get(p, p) for p in scores.keys()],
@@ -4182,6 +4595,7 @@ class DashboardGenerator:
         )
 
         chart_data_json = json.dumps(chart_data)
+        score_model_json = json.dumps(self.engine.score_model_payload(), ensure_ascii=False).replace("</", "<\\/")
         chartjs_lib = self._vendor_js("chart.umd.min.js")
 
         html = f"""<!DOCTYPE html>
@@ -4189,7 +4603,8 @@ class DashboardGenerator:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Azure Well-Architected Framework - Consolidated Dashboard</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{base64.b64encode(self._assessment_logo_svg('').encode('utf-8')).decode('ascii')}">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: light)" href="data:image/png;base64,{self._favicon_png_base64('dark')}">
+<link rel="icon" type="image/png" media="(prefers-color-scheme: dark)" href="data:image/png;base64,{self._favicon_png_base64('white')}">
 <script>
     (() => {{
         const param = new URLSearchParams(window.location.search).get("scoutTheme");
@@ -4366,6 +4781,10 @@ body {{
     box-shadow: var(--cp-shadow); padding: 10px 20px; margin: 0 0 18px;
 }}
 .global-sub-filter-label {{ color: var(--cp-text-muted); font-size: 12.5px; font-weight: 700; }}
+.global-sub-filter-count {{ font-size: 11px; font-weight: 700; color: var(--cp-accent); }}
+.global-sub-filter-note {{ flex-basis: 100%; font-size: 11px; color: var(--cp-text-muted); }}
+.is-sub-hidden {{ display: none !important; }}
+.action-scope {{ margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--cp-accent); }}
 .global-sub-check {{
     display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
     border: 1px solid var(--cp-border); background: var(--cp-bg); font-size: 12.5px; cursor: pointer;
@@ -4496,17 +4915,17 @@ body {{
     display: flex; align-items: center; justify-content: center;
     font-size: 48px; font-weight: 700;
     background: conic-gradient(
-        {'var(--cp-success)' if overall >= 80 else 'var(--cp-warning)' if overall >= 50 else 'var(--cp-danger)'} {overall * 3.6}deg,
-        var(--cp-border) {overall * 3.6}deg
+        var(--overall-color) calc(var(--overall-deg) * 1deg),
+        var(--cp-border) calc(var(--overall-deg) * 1deg)
     );
     position: relative;
 }}
 .score-circle::after {{
-    content: '{overall}'; position: absolute;
+    content: attr(data-value); position: absolute;
     width: 114px; height: 114px; border-radius: 50%;
     background: var(--cp-surface); display: flex; align-items: center; justify-content: center;
     font-size: 40px; font-weight: 700; letter-spacing: -0.02em;
-    color: {'var(--cp-success)' if overall >= 80 else 'var(--cp-warning)' if overall >= 50 else 'var(--cp-danger)'};
+    color: var(--overall-color);
 }}
 .score-label {{ margin-top: 12px; font-size: 13px; color: var(--cp-text-muted); font-weight: 590; }}
 
@@ -4558,6 +4977,8 @@ body {{
 .breakdown-card h4 {{ font-size: 13px; font-weight: 590; margin-bottom: 10px; display: flex; justify-content: space-between; }}
 .breakdown-score {{ color: var(--cp-link); }}
 .breakdown-note {{ font-size: 12px; color: var(--cp-text-muted); }}
+.pillar-note {{ margin-top: 8px; font-size: 10.5px; line-height: 1.4; color: var(--cp-text-muted); }}
+.secure-gap-note {{ margin: 6px 0; padding: 8px 10px; border-left: 3px solid var(--cp-warning); background: var(--cp-surface-soft); border-radius: 6px; }}
 .breakdown-table-wrap {{ width: 100%; overflow-x: auto; }}
 .cost-breakdown-card table {{ table-layout: fixed; }}
 .cost-breakdown-card th,
@@ -4596,6 +5017,13 @@ body {{
     padding: 4px 7px; font-size: 10px; font-weight: 650; white-space: nowrap;
 }}
 .resource-rec-card > p {{ color: var(--cp-text-muted); font-size: 12px; margin-bottom: 14px; }}
+.resource-rec-implementation {{
+    display: grid; gap: 2px; margin-bottom: 13px; padding: 9px 10px;
+    background: var(--cp-surface-soft); border-radius: 7px;
+}}
+.resource-rec-implementation span {{ color: var(--cp-text-muted); font-size: 9px; font-weight: 700; text-transform: uppercase; }}
+.resource-rec-implementation strong {{ color: var(--cp-text); font-size: 12px; }}
+.resource-rec-implementation small {{ color: var(--cp-text-soft); font-size: 9px; }}
 .resource-rec-evidence-label {{ font-size: 10px; font-weight: 700; margin-bottom: 5px; }}
 .resource-rec-card ul {{ padding-left: 17px; margin-bottom: 14px; }}
 .resource-rec-card li {{ color: var(--cp-text-muted); font-size: 11px; margin: 4px 0; }}
@@ -4906,7 +5334,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 <!-- Overall Score + Pillar Breakdown -->
 <div class="score-section">
     <div class="overall-score">
-        <div class="score-circle"></div>
+        <div class="score-circle" id="overallScoreCircle" data-value="{overall}" style="--overall-deg:{overall * 3.6}; --overall-color:{overall_color};"></div>
         <div class="score-label">{bi("Overall WAF Score", "Puntaje General WAF", "Pontuação Geral WAF")}</div>
     </div>
     <div class="pillars-grid">
@@ -4956,10 +5384,10 @@ body.lang-pt .i18n-pt {{ display: inline; }}
     </div>
 </div>
 
-<!-- Recommended Azure Resources -->
+<!-- Evidence-based remediation recommendations -->
 <div class="section resource-recommendations">
-    <div class="section-title security-title">{bi('Recommended Azure resources & services', 'Recursos y servicios de Azure recomendados', 'Recursos e serviços do Azure recomendados')}{it('Azure services and resources suggested based on gaps found across all pillars during discovery and analysis.', 'Servicios y recursos de Azure sugeridos en base a las brechas encontradas en todos los pilares durante la detecci\u00f3n y el an\u00e1lisis.', 'Serviços e recursos do Azure sugeridos com base nas lacunas encontradas em todos os pilares durante a descoberta e a an\u00e1lise.')}</div>
-    <p class="resource-rec-intro">{bi('These suggestions are derived from all generated recommendations and action items. Validate architecture, licensing, and cost before deployment.', 'Estas sugerencias se derivan de todas las recomendaciones y elementos de acción generados. Valide la arquitectura, las licencias y el costo antes de implementar.', 'Estas sugestões são derivadas de todas as recomendações e itens de ação gerados. Valide a arquitetura, o licenciamento e o custo antes da implantação.')}</p>
+    <div class="section-title security-title">{bi('Evidence-based remediation priorities', 'Prioridades de remediación basadas en evidencia', 'Prioridades de remediação baseadas em evidências')}{it('Highest-priority observed findings, balanced across WAF pillars. A service is suggested only when the finding directly identifies a relevant implementation path.', 'Hallazgos observados de mayor prioridad, balanceados entre pilares WAF. Solo se sugiere un servicio cuando el hallazgo identifica directamente una ruta de implementación relevante.', 'Descobertas observadas de maior prioridade, equilibradas entre os pilares WAF. Um serviço só é sugerido quando a descoberta identifica diretamente um caminho de implementação relevante.')}</div>
+    <p class="resource-rec-intro">{bi('Each card starts from an observed action item and preserves its source, affected scope, and WAF pillar. Suggested services are implementation options, not automatic deployment decisions; architecture, licensing, cost, and tradeoffs still require validation.', 'Cada tarjeta parte de una acción observada y conserva su fuente, alcance afectado y pilar WAF. Los servicios sugeridos son opciones de implementación, no decisiones automáticas de despliegue; aún deben validarse arquitectura, licenciamiento, costo y compromisos.', 'Cada cartão parte de uma ação observada e preserva sua fonte, escopo afetado e pilar WAF. Os serviços sugeridos são opções de implementação, não decisões automáticas de implantação; arquitetura, licenciamento, custo e compensações ainda exigem validação.')}</p>
     {self._render_azure_resource_recommendations()}
 </div>
 
@@ -5100,6 +5528,7 @@ body.lang-pt .i18n-pt {{ display: inline; }}
 </script>
 <script>
 window.WAF_CHART_DATA = {chart_data_json};
+window.WAF_SCORE_MODEL = {score_model_json};
 function cssVar(name) {{ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }}
 function resolveColorVars(vars_) {{ return (vars_ || []).map(cssVar); }}
 function currentChartLang() {{
@@ -5557,13 +5986,29 @@ function initGlobalSubscriptionFilter() {{
     }}
     var subHeaderNames = ['Subscription', 'Suscripci\u00f3n', 'Assinatura'];
 
+    // Tables may show a subscription by display name or by GUID: every known name/id is either
+    // selected or not, while values that aren't a known subscription are never hidden.
+    var known = {{}};
+    checks.forEach(function(c) {{
+        known[c.value.toLowerCase()] = true;
+        if (c.dataset.subId) known[c.dataset.subId.toLowerCase()] = true;
+    }});
+
     function apply() {{
         var selected = {{}};
-        checks.forEach(function(c) {{ if (c.checked) selected[c.value] = true; }});
+        checks.forEach(function(c) {{
+            if (!c.checked) return;
+            selected[c.value.toLowerCase()] = true;
+            if (c.dataset.subId) selected[c.dataset.subId.toLowerCase()] = true;
+        }});
+        var selectedCount = checks.filter(function(c) {{ return c.checked; }}).length;
+        activeSubscriptions = selectedCount === checks.length ? null : selected;
+        var countEl = bar.querySelector('.global-sub-filter-count');
+        if (countEl) countEl.textContent = selectedCount === checks.length ? '' : selectedCount + ' / ' + checks.length;
 
         document.querySelectorAll('.cost-pivot-block').forEach(function(block) {{
             block.querySelectorAll('.cost-pivot-sub-check input').forEach(function(c) {{
-                var want = !!selected[c.value];
+                var want = !!selected[c.value.toLowerCase()];
                 if (c.checked !== want) {{
                     c.checked = want;
                     c.dispatchEvent(new Event('change', {{ bubbles: true }}));
@@ -5588,8 +6033,8 @@ function initGlobalSubscriptionFilter() {{
             var rows = Array.prototype.slice.call(tbody.rows);
             rows.forEach(function(row) {{
                 if (!row.cells[subCol]) return;
-                var val = visibleText(row.cells[subCol]);
-                row.dataset.globalSubHidden = selected[val] ? '' : '1';
+                var val = visibleText(row.cells[subCol]).toLowerCase();
+                row.dataset.globalSubHidden = (!val || !known[val] || selected[val]) ? '' : '1';
             }});
             if (wrap.__applyLocalFilters) {{
                 wrap.__applyLocalFilters();
@@ -5600,6 +6045,8 @@ function initGlobalSubscriptionFilter() {{
                 }});
             }}
         }});
+        refreshScores();
+        applyDismissedState();
     }}
 
     checks.forEach(function(c) {{ c.addEventListener('change', apply); }});
@@ -5803,6 +6250,245 @@ function updateActionCounters() {{
 }}
 
 var activeSeverities = null; /* null = show all severities */
+var activeSubscriptions = null; /* null = all subscriptions; otherwise {{lowercased name or id: true}} */
+
+/* An item/card is hidden by the subscription filter only when it lists subscriptions and none are selected
+   (items with an unknown subscription list stay visible). */
+function cardSubscriptionHidden(card) {{
+    if (!activeSubscriptions) return false;
+    var raw = card.getAttribute('data-subscriptions');
+    if (!raw) return false;
+    var subs;
+    try {{ subs = JSON.parse(raw); }} catch (e) {{ return false; }}
+    subs = Array.isArray(subs) ? subs : Object.keys(subs);
+    if (!subs.length) return false;
+    return !subs.some(function(s) {{ return !!activeSubscriptions[String(s).toLowerCase()]; }});
+}}
+
+/* ---- Pillar scores for the selected subscriptions (mirrors ScoreModel in the generator) ---- */
+function wafRound(value) {{ return Math.floor(value + 0.5); }}
+function wafTotal(bySubscription, selection) {{
+    var total = 0;
+    var map = bySubscription || {{}};
+    Object.keys(map).forEach(function(sub) {{
+        if (!selection || sub === '' || selection[sub.toLowerCase()]) total += map[sub];
+    }});
+    return total;
+}}
+function wafPillar(spec, selection) {{
+    if (spec.kind === 'advisor') {{
+        var pool = wafTotal(spec.pool, selection);
+        if (pool <= 0) return {{ available: false }};
+        var rows = [], weighted = 0, weightTotal = 0;
+        Object.keys(spec.weights).forEach(function(subcategory) {{
+            var weight = spec.weights[subcategory];
+            var impacted = spec.forcedZero.indexOf(subcategory) !== -1 ? pool : Math.min(wafTotal(spec.impacted[subcategory], selection), pool);
+            var healthy = Math.max(0, pool - impacted), pct = healthy / pool * 100;
+            weighted += pct * weight;
+            weightTotal += weight;
+            rows.push({{ subcategory: subcategory, healthy: healthy, total: pool, pct: wafRound(pct * 10) / 10 }});
+        }});
+        return {{ available: true, score: wafRound(weighted / weightTotal), rows: rows }};
+    }}
+    if (spec.kind === 'ratio') {{
+        var costPool = wafTotal(spec.pool, selection);
+        var sources = spec.sources.map(function(s) {{
+            return {{ name: s.name, count: wafTotal(s.count, selection), affected: wafTotal(s.affected, selection) }};
+        }});
+        if (costPool <= 0) return {{ available: false, sources: sources }};
+        var impactedCost = Math.min(wafTotal(spec.impacted, selection), costPool);
+        var healthyCost = Math.max(0, costPool - impactedCost);
+        return {{ available: true, score: wafRound(healthyCost / costPool * 100), sources: sources, impacted: impactedCost, healthy: healthyCost, total: costPool }};
+    }}
+    var picked = spec.scores.filter(function(pair) {{
+        return !selection || pair[0] === '' || selection[pair[0].toLowerCase()];
+    }}).map(function(pair) {{ return pair[1]; }});
+    if (!picked.length) return {{ available: false }};
+    var average = picked.reduce(function(a, b) {{ return a + b; }}, 0) / picked.length;
+    return {{ available: true, score: wafRound(average), pct: wafRound(average * 10) / 10, scored: picked.length }};
+}}
+function wafScoreColor(value) {{
+    return value >= 80 ? 'var(--cp-success)' : value >= 50 ? 'var(--cp-warning)' : 'var(--cp-danger)';
+}}
+function refreshScores() {{
+    var model = window.WAF_SCORE_MODEL;
+    if (!model) return;
+    var results = {{}}, available = [];
+    Object.keys(model.pillars).forEach(function(pillar) {{
+        results[pillar] = wafPillar(model.pillars[pillar], activeSubscriptions);
+        if (results[pillar].available) available.push(results[pillar].score);
+    }});
+    var overall = available.length ? wafRound(available.reduce(function(a, b) {{ return a + b; }}, 0) / available.length) : null;
+
+    var circle = document.getElementById('overallScoreCircle');
+    if (circle) {{
+        circle.setAttribute('data-value', overall === null ? 'N/A' : overall);
+        circle.style.setProperty('--overall-deg', (overall || 0) * 3.6);
+        circle.style.setProperty('--overall-color', wafScoreColor(overall || 0));
+    }}
+    Object.keys(results).forEach(function(pillar) {{
+        var r = results[pillar];
+        document.querySelectorAll('[data-score="' + pillar + '"]').forEach(function(el) {{
+            el.textContent = r.available ? r.score + (el.getAttribute('data-score-suffix') || '') : 'N/A';
+        }});
+        document.querySelectorAll('[data-pillar-card="' + pillar + '"] .pillar-bar-fill').forEach(function(fill) {{
+            fill.style.width = (r.available ? r.score : 0) + '%';
+        }});
+    }});
+    var chartCfg = window.WAF_CHART_DATA && window.WAF_CHART_DATA.pillarScores;
+    if (chartCfg && chartCfg.keys) {{
+        chartCfg.values = chartCfg.keys.map(function(key) {{ return results[key] && results[key].available ? results[key].score : 0; }});
+        var chartEntry = window.__wafCharts && window.__wafCharts.pillarScoresChart;
+        if (chartEntry && chartEntry.chart) {{
+            chartEntry.chart.data.datasets[0].data = chartCfg.values;
+            chartEntry.chart.update();
+        }}
+    }}
+    document.querySelectorAll('tr[data-subcat]').forEach(function(tr) {{
+        var parts = tr.getAttribute('data-subcat').split('|');
+        var r = results[parts[0]];
+        var row = r && r.available ? r.rows.filter(function(x) {{ return x.subcategory === parts[1]; }})[0] : null;
+        var healthyCell = tr.querySelector('.sc-ht');
+        if (healthyCell) healthyCell.textContent = row ? row.healthy + '/' + row.total : 'N/A';
+        var pctCell = tr.querySelector('.sc-pct');
+        if (!pctCell) return;
+        var fill = pctCell.querySelector('.inline-bar-fill');
+        var label = row ? row.pct.toFixed(1) + '%' : 'N/A';
+        if (fill) {{
+            fill.style.width = (row ? row.pct : 0) + '%';
+            fill.style.background = wafScoreColor(row ? row.pct : 0);
+            var span = pctCell.querySelector('span');
+            if (span) span.textContent = label;
+        }} else {{
+            pctCell.textContent = label;
+        }}
+    }});
+    var cost = results['Cost Optimization'];
+    document.querySelectorAll('tr[data-cost-source]').forEach(function(tr) {{
+        var name = tr.getAttribute('data-cost-source');
+        var source = cost && cost.sources ? cost.sources.filter(function(s) {{ return s.name === name; }})[0] : null;
+        var ok = !!(cost && cost.available && source);
+        var affected = ok ? Math.min(source.affected, cost.total) : 0;
+        var healthy = ok ? Math.max(0, cost.total - affected) : 0;
+        tr.querySelector('.cs-count').textContent = ok ? source.count + ' / ' + affected : 'N/A';
+        tr.querySelector('.cs-healthy').textContent = ok ? healthy + '/' + cost.total : 'N/A';
+        tr.querySelector('.cs-score').textContent = ok ? wafRound(healthy / cost.total * 100) + '%' : 'N/A';
+    }});
+    document.querySelectorAll('tr[data-cost-combined]').forEach(function(tr) {{
+        var ok = !!(cost && cost.available);
+        var findings = ok ? cost.sources.reduce(function(sum, s) {{ return sum + s.count; }}, 0) : 0;
+        tr.querySelector('.cs-count').textContent = ok ? findings + ' / ' + cost.impacted : 'N/A';
+        tr.querySelector('.cs-healthy').textContent = ok ? cost.healthy + '/' + cost.total : 'N/A';
+    }});
+    var secure = results['Security'];
+    document.querySelectorAll('[data-secure-pct]').forEach(function(el) {{
+        el.textContent = secure && secure.available ? secure.pct.toFixed(1) + '%' : 'N/A';
+    }});
+    document.querySelectorAll('[data-secure-scored]').forEach(function(el) {{
+        el.textContent = secure && secure.available ? secure.scored : 0;
+    }});
+    refreshSecurityGapNote(model);
+}}
+
+/* Security averages only the subscriptions that have a Defender Secure Score. For the selected
+   subscriptions that don't, say so instead of leaving a bare N/A. */
+function refreshSecurityGapNote(model) {{
+    var spec = model.pillars.Security;
+    var nodes = document.querySelectorAll('[data-pillar-note="Security"]');
+    if (!spec || !nodes.length) return;
+    var scored = {{}};
+    spec.scores.forEach(function(pair) {{ if (pair[0] !== '') scored[pair[0].toLowerCase()] = true; }});
+    var gaps = model.subscriptions.filter(function(name) {{
+        var key = name.toLowerCase();
+        return (!activeSubscriptions || activeSubscriptions[key]) && !scored[key];
+    }});
+    if (!gaps.length) {{
+        nodes.forEach(function(node) {{ node.hidden = true; node.innerHTML = ''; }});
+        return;
+    }}
+    var names = gaps.map(escapeHtml).join(', ');
+    var lead = {{
+        en: 'No Defender Secure Score for ' + names + ' (left out of the Security average).',
+        es: 'Sin Secure Score de Defender para ' + names + ' (excluidas del promedio de Security).',
+        pt: 'Sem Secure Score do Defender para ' + names + ' (fora da m\u00e9dia de Security).'
+    }};
+    var html = ['en', 'es', 'pt'].map(function(lang) {{ return '<span class="i18n-' + lang + '">' + lead[lang] + '</span>'; }}).join('');
+    nodes.forEach(function(node) {{ node.innerHTML = html; node.hidden = false; }});
+}}
+
+/* While a subscription filter is active, each action shows how many of its affected resources
+   fall inside the selected subscriptions (its title/total always describe the whole tenant). */
+function updateScopeBadges() {{
+    document.querySelectorAll('.action-item[data-subscriptions]').forEach(function(card) {{
+        var badge = card.querySelector('.action-scope');
+        if (!activeSubscriptions) {{ if (badge) badge.remove(); return; }}
+        var counts;
+        try {{ counts = JSON.parse(card.getAttribute('data-subscriptions')); }} catch (e) {{ return; }}
+        if (!counts || Array.isArray(counts)) return;
+        var total = 0, selected = 0;
+        Object.keys(counts).forEach(function(name) {{
+            total += counts[name];
+            if (activeSubscriptions[name.toLowerCase()]) selected += counts[name];
+        }});
+        if (!badge) {{
+            badge = document.createElement('div');
+            badge.className = 'action-scope';
+            var anchor = card.querySelector('.action-desc');
+            if (anchor) anchor.insertAdjacentElement('afterend', badge); else card.appendChild(badge);
+        }}
+        var figures = selected + ' / ' + total;
+        badge.innerHTML = '<span class="i18n-en">In selected subscriptions: ' + figures + '</span>' +
+            '<span class="i18n-es">En las suscripciones seleccionadas: ' + figures + '</span>' +
+            '<span class="i18n-pt">Nas assinaturas selecionadas: ' + figures + '</span>';
+    }});
+}}
+
+/* Overview charts count the action items that pass the subscription filter. */
+function refreshActionCharts() {{
+    var severityCounts = {{}}, pillarCounts = {{}};
+    document.querySelectorAll('#actionsListAll .action-item').forEach(function(card) {{
+        if (card.classList.contains('is-sub-hidden')) return;
+        var severity = card.getAttribute('data-severity'), pillar = card.getAttribute('data-pillar');
+        severityCounts[severity] = (severityCounts[severity] || 0) + 1;
+        pillarCounts[pillar] = (pillarCounts[pillar] || 0) + 1;
+    }});
+    [['actionSeverity', severityCounts], ['actionByPillar', pillarCounts]].forEach(function(pair) {{
+        var cfg = window.WAF_CHART_DATA && window.WAF_CHART_DATA[pair[0]];
+        if (!cfg || !cfg.keys) return;
+        cfg.values = cfg.keys.map(function(key) {{ return pair[1][key] || 0; }});
+        var entry = window.__wafCharts && window.__wafCharts[cfg.canvasId];
+        if (entry && entry.chart) {{
+            entry.chart.data.datasets[0].data = cfg.values;
+            entry.chart.update();
+        }}
+    }});
+}}
+
+/* Remediation cards: hide the ones outside the selected subscriptions, then re-apply the
+   "show only N, expand for more" rule over the cards that remain. */
+function refreshRecommendationCards() {{
+    var grid = document.querySelector('.resource-rec-grid');
+    if (!grid) return;
+    var visibleLimit = Number(grid.getAttribute('data-visible')) || 4;
+    var btn = grid.nextElementSibling;
+    if (btn && !btn.classList.contains('table-more-note')) btn = null;
+    var expanded = !!btn && btn.classList.contains('expanded');
+    var shown = 0, extra = 0;
+    grid.querySelectorAll('.resource-rec-card').forEach(function(card) {{
+        var subHidden = cardSubscriptionHidden(card);
+        card.classList.toggle('is-sub-hidden', subHidden);
+        if (subHidden) {{ card.classList.remove('extra-row'); card.hidden = false; return; }}
+        var isExtra = shown >= visibleLimit;
+        card.classList.toggle('extra-row', isExtra);
+        card.hidden = isExtra && !expanded;
+        shown++;
+        if (isExtra) extra++;
+    }});
+    if (btn) {{
+        btn.style.display = extra > 0 ? '' : 'none';
+        btn.querySelectorAll('.rec-more-count').forEach(function(el) {{ el.textContent = extra; }});
+    }}
+}}
 
 function applyDismissedState() {{
     var dismissed = loadJsonList(ACTION_DISMISSED_KEY);
@@ -5818,9 +6504,14 @@ function applyDismissedState() {{
         var severity = card.getAttribute('data-severity');
         var severityHidden = !!activeSeverities && activeSeverities.indexOf(severity) === -1;
         card.classList.toggle('is-severity-hidden', severityHidden);
-        card.style.display = ((isDismissed && !showDismissedActions) || severityHidden) ? 'none' : '';
+        var subHidden = cardSubscriptionHidden(card);
+        card.classList.toggle('is-sub-hidden', subHidden);
+        card.style.display = ((isDismissed && !showDismissedActions) || severityHidden || subHidden) ? 'none' : '';
     }});
     updateActionCounters();
+    updateScopeBadges();
+    refreshActionCharts();
+    refreshRecommendationCards();
 }}
 
 function applySeverityFilter(severity) {{
@@ -5983,6 +6674,7 @@ if (toggleDismissedBtn) {{
     initTableFilters();
     initCostPivotBlocks();
     initGlobalSubscriptionFilter();
+    refreshScores();
     initAllCharts();
 }})();
 </script>

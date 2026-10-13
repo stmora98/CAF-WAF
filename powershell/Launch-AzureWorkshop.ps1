@@ -135,6 +135,14 @@ Import-Module Az.ResourceGraph -ErrorAction Stop
 Import-Module Az.Monitor -ErrorAction SilentlyContinue
 Import-Module ImportExcel -ErrorAction Stop
 
+# Get-AzDiagnosticSetting emits repeated advance notices for Az.Monitor output-model
+# changes even though this toolkit only reads its stable destination properties.
+try {
+    Update-AzConfig -DisplayBreakingChangeWarning $false -AppliesTo Az.Monitor -Scope Process -ErrorAction Stop | Out-Null
+} catch {
+    Write-Warning "Could not suppress Az.Monitor future breaking-change notices for this run: $($_.Exception.Message)"
+}
+
 # Ensure Python + openpyxl for the dashboard agent
 # `Get-Command` alone isn't enough: on Windows, `python`/`python3` can resolve to the
 # Microsoft Store app-execution-alias stub, which "exists" in PATH but exits 9009 without

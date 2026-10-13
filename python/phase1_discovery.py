@@ -18,6 +18,7 @@ from azure.keyvault.secrets import SecretClient
 from common.argquery import run_query
 from common.auth import get_credential, resolve_subscription_ids
 from common.excelio import add_sheet, make_output_path, new_workbook, save
+from common.vnet_exposure import collect_exposure_rows
 
 
 def run(credential=None, subscription_ids=None) -> str:
@@ -137,6 +138,14 @@ resources
 | project id, name, resourceGroup, subscriptionId, location, ip, allocation, skuName, associatedTo, tags
 | order by name asc""")
 
+    # Which VNets actually host internet-reachable public IPs (used to prioritize DDoS Protection
+    # findings). A failure here only skips the sheet; the dashboard falls back to its default.
+    try:
+        exposure_rows = collect_exposure_rows(lambda query: run_query(credential, subscription_ids, query))
+        count = add_sheet(wb, "VNetPublicExposure", exposure_rows, empty_message="No resources found")
+        print(f"  [VNetPublicExposure] {count} rows")
+    except HttpResponseError as exc:
+        print(f"  [VNetPublicExposure] skipped: {exc.message}")
     q("DNS", """
 resources
 | where type in ("microsoft.network/dnszones", "microsoft.network/privatednszones")

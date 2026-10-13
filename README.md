@@ -53,6 +53,8 @@ The launcher installs everything else for you the first time it runs — you don
 | Python 3.6+ | Pre-installed in Azure Cloud Shell; install separately for local Windows runs ([python.org](https://www.python.org/downloads/)) |
 | `openpyxl` (Python package) | Auto-installed by the launcher when Python is found |
 
+The toolkit suppresses Az.Monitor's advance breaking-change notices only for its current PowerShell process. Operational warnings and errors remain visible, and your persistent Azure PowerShell configuration is not changed.
+
 ## How to run it
 
 ### Option A — Windows, local (recommended)
@@ -217,7 +219,9 @@ The Python agent produces a **WAF_Dashboard.html** with:
 - **Resource Summary** tables
 - **Advisor Findings** aggregated view
 - **Dedicated Security tab** for CSPM recommendations, MCSB compliance, Defender plans, XDR incidents/alerts, Endpoint exposure, and source coverage
-- **Governance resource recommendations** derived from the generated findings, with priority, supporting action items, and Microsoft Learn guidance
+- **Evidence-based remediation cards** generated from the highest-priority observed action items, balanced across WAF pillars. Each card preserves its evidence source and affected scope, and links to a service-specific Microsoft Learn guide only when the finding directly supports that implementation path; otherwise it requests a pillar-level architecture review.
+- **Dashboard-wide subscription filter** (bar under the tabs): hides table rows (every table with a Subscription column), action items, remediation cards, and the Overview charts for unselected subscriptions, shows how many of each action's affected resources fall inside the selection, and **recomputes every pillar score and the overall score** (pillar cards, score breakdowns, and the pillar chart) for the selected subscriptions. Pillar scores are computed from per-subscription counts (assessed-resource pool from the Governance `ResourceSummary`, Defender Secure Score per subscription), so selecting every subscription reproduces the unfiltered scores exactly. A pillar with no data for the selection (for example Security when none of the selected subscriptions has a Secure Score) shows N/A and is left out of the overall average. Subscriptions without a Defender Secure Score are left out of the Security average (an estimate from findings isn't comparable to the Secure Score), and a note under the Security score names them. Subscriptions are matched by name or GUID, and items whose subscription can't be determined always stay visible.
+- **Exposure-aware DDoS severity**: the Discovery phase also writes a `VNetPublicExposure` sheet mapping public IPs to the VNets that host them (through network interfaces, Application Gateway, Firewall, Bastion, gateways, and public load balancers, including VMSS/AKS backends). VNets without DDoS Protection that host public IPs are rated **High**; those with none are rated **Low**. Workbooks created before this sheet existed keep the previous **Medium** rating until Discovery is re-run.
 
 ### Scoring Logic
 
